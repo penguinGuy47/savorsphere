@@ -1,0 +1,28 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: 'Poppins', sans-serif;
+  background-color: #ffffff; /* white */
+  color: #111827; /* dark text */
+}
+
+.card {
+  @apply bg-[#f9fafb] rounded-xl p-4 shadow-md; /* light gray, rounded corners */
+}
+
+.button-primary {
+  @apply bg-[#ef4444] text-white rounded-lg px-4 py-2; /* red primary */
+}
+
+.button-secondary {
+  @apply bg-[#10b981] text-white rounded-lg px-4 py-2; /* green secondary */
+}
+
+.text-gray {
+  @apply text-[#6b7280];
+}
