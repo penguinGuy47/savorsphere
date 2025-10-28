@@ -34,9 +34,13 @@ function MenuPage() {
 
     useEffect(() => {
         if (Array.isArray(menuItems)) {
-            setFilteredItems(
-            category === 'All' ? menuItems : menuItems.filter((item) => item.category === category)
-            );
+            if (category === 'All') {
+                setFilteredItems(menuItems);
+            } else if (category === 'Lunch') {
+                setFilteredItems(menuItems.filter((item) => item.type === 'lunch'));
+            } else {
+                setFilteredItems(menuItems.filter((item) => item.category === category));
+            }
         } else {
             setFilteredItems([]);
         }

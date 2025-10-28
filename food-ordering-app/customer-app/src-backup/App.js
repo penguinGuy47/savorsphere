@@ -31,7 +31,7 @@ function App() {
   return (
     <CartContext.Provider value={{ cart, addToCart, setCart, cartCount }}>
       <Router>
-        <div classname="container mxauto p-4">
+        <div className="container mx-auto p-4">
           <Routes>
             <Route path="/" element={<MenuPage />} />
             <Route path="/item/:itemId" element={<ItemDetailsPage />} />
