@@ -216,6 +216,33 @@ export class SavorSphereStack extends Stack {
       integration: new HttpLambdaIntegration('VerifyOTPInt', verifyOTPFn)
     });
 
+    // Vapi → Lambda webhook that receives every phone order
+    const vapiOrderWebhook = new NodejsFunction(this, 'VapiOrderWebhook', {
+      functionName: 'vapiOrderWebhook',
+      entry: lambdaEntry('lambdas', 'vapiOrderWebhook', 'vapiOrderWebhook.mjs'),
+      handler: 'handler',
+      runtime: Runtime.NODEJS_20_X,
+      memorySize: 256,
+      timeout: Duration.seconds(15),
+      logRetention: logs.RetentionDays.ONE_WEEK,
+      environment: {
+        TABLE_NAME: Orders.tableName
+      },
+      bundling: {
+        target: 'es2022',
+        format: 'esm',
+        minify: true,
+        sourceMap: false,
+        externalModules: []
+      }
+    });
+    Orders.grantWriteData(vapiOrderWebhook);
+    api.addRoutes({
+      path: '/vapi/webhook',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('VapiOrderWebhookInt', vapiOrderWebhook)
+    });
+
     new CfnOutput(this, 'ApiUrl', { value: api.apiEndpoint });
   }
 }
