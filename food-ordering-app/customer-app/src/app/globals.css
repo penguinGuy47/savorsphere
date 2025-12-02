@@ -47,6 +47,93 @@ html {
   }
 }
 
+/* Page transition animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeInSlide {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Page transition wrapper */
+.page-transition {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Item detail page specific animation */
+.item-detail-page {
+  animation: fadeIn 0.4s ease-out;
+}
+
+/* Desktop: slide animation for item detail */
+@media (min-width: 768px) {
+  .item-detail-page {
+    animation: fadeInSlide 0.4s ease-out;
+  }
+}
+
+/* Smooth link transitions */
+a {
+  transition: opacity 0.2s ease;
+}
+
+a:hover {
+  opacity: 0.8;
+}
+
+/* Reduce motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  .page-transition,
+  .item-detail-page {
+    animation: none;
+  }
+  
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* Navigation loading indicator */
+@keyframes loadingBar {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.navigation-loading {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #020403, transparent);
+  transform: translateX(-100%);
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.navigation-loading.active {
+  animation: loadingBar 0.6s ease-out;
+}
+
 /* Optimize sticky elements for mobile */
 @media (max-width: 768px) {
   body {

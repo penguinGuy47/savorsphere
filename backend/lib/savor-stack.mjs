@@ -4,7 +4,8 @@ import { Construct } from 'constructs';
 import {
   Stack, CfnOutput, Duration,
   aws_dynamodb as dynamodb,
-  aws_logs as logs
+  aws_logs as logs,
+  aws_iam as iam
 } from 'aws-cdk-lib';
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -30,11 +31,14 @@ export class SavorSphereStack extends Stack {
     const Payments = dynamodb.Table.fromTableName(this, 'PaymentsTbl', 'Payments');
     const RestaurantSettings = dynamodb.Table.fromTableName(this, 'RestaurantSettingsTbl', 'RestaurantSettings');
     const MenuItems = dynamodb.Table.fromTableName(this, 'MenuItemsTbl', 'MenuItems');
+    
+    // OTP Codes table - create if it doesn't exist, or reference existing
+    const OTPCodes = dynamodb.Table.fromTableName(this, 'OTPCodesTbl', 'OTPCodes');
 
     const api = new HttpApi(this, 'SavorHttpApi', {
       corsPreflight: {
         allowOrigins: ['*'],
-        allowMethods: [HttpMethod.GET, HttpMethod.POST, HttpMethod.OPTIONS],
+        allowMethods: [HttpMethod.GET, HttpMethod.POST, HttpMethod.PATCH, HttpMethod.PUT, HttpMethod.OPTIONS],
         allowHeaders: ['*']
       }
     });
@@ -91,6 +95,30 @@ export class SavorSphereStack extends Stack {
       integration: new HttpLambdaIntegration('GetOrderInt', getOrderFn)
     });
 
+    const updateOrderFn = new NodejsFunction(this, 'UpdateOrderFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'updateOrder', 'index.mjs')
+    });
+    Orders.grantReadWriteData(updateOrderFn);
+    api.addRoutes({
+      path: '/order/{id}',
+      methods: [HttpMethod.PATCH],
+      integration: new HttpLambdaIntegration('UpdateOrderInt', updateOrderFn)
+    });
+
+    const getOrdersFn = new NodejsFunction(this, 'GetOrdersFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'getOrders', 'index.mjs')
+    });
+    Orders.grantReadData(getOrdersFn);
+    OrderItems.grantReadData(getOrdersFn);
+    // GET /orders for listing orders (admin), POST /orders for creating orders (customer)
+    api.addRoutes({
+      path: '/orders',
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration('GetOrdersInt', getOrdersFn)
+    });
+
     const getMenuFn = new NodejsFunction(this, 'GetMenuFn', {
       ...defaultFnProps,
       entry: lambdaEntry('lambdas', 'getMenu', 'index.mjs')
@@ -102,6 +130,39 @@ export class SavorSphereStack extends Stack {
       integration: new HttpLambdaIntegration('GetMenuInt', getMenuFn)
     });
 
+    const createMenuItemFn = new NodejsFunction(this, 'CreateMenuItemFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'createMenuItem', 'index.mjs')
+    });
+    MenuItems.grantReadWriteData(createMenuItemFn);
+    api.addRoutes({
+      path: '/menu',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('CreateMenuItemInt', createMenuItemFn)
+    });
+
+    const updateMenuItemFn = new NodejsFunction(this, 'UpdateMenuItemFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'updateMenuItem', 'index.mjs')
+    });
+    MenuItems.grantReadWriteData(updateMenuItemFn);
+    api.addRoutes({
+      path: '/menu/{menuItemId}',
+      methods: [HttpMethod.PUT, HttpMethod.PATCH],
+      integration: new HttpLambdaIntegration('UpdateMenuItemInt', updateMenuItemFn)
+    });
+
+    const deleteMenuItemFn = new NodejsFunction(this, 'DeleteMenuItemFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'deleteMenuItem', 'index.mjs')
+    });
+    MenuItems.grantReadWriteData(deleteMenuItemFn);
+    api.addRoutes({
+      path: '/menu/{menuItemId}',
+      methods: [HttpMethod.DELETE],
+      integration: new HttpLambdaIntegration('DeleteMenuItemInt', deleteMenuItemFn)
+    });
+
     const getSettingsFn = new NodejsFunction(this, 'GetSettingsFn', {
       ...defaultFnProps,
       entry: lambdaEntry('lambdas', 'getSettings', 'index.mjs')
@@ -111,6 +172,48 @@ export class SavorSphereStack extends Stack {
       path: '/settings',
       methods: [HttpMethod.GET],
       integration: new HttpLambdaIntegration('GetSettingsInt', getSettingsFn)
+    });
+
+    const updateSettingsFn = new NodejsFunction(this, 'UpdateSettingsFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'updateSettings', 'index.mjs')
+    });
+    RestaurantSettings.grantReadWriteData(updateSettingsFn);
+    api.addRoutes({
+      path: '/settings',
+      methods: [HttpMethod.PUT, HttpMethod.PATCH],
+      integration: new HttpLambdaIntegration('UpdateSettingsInt', updateSettingsFn)
+    });
+
+    // Send OTP Lambda
+    const sendOTPFn = new NodejsFunction(this, 'SendOTPFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'sendOTP', 'index.mjs')
+    });
+    OTPCodes.grantReadWriteData(sendOTPFn);
+    sendOTPFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['sns:Publish'],
+        resources: ['*']
+      })
+    );
+    api.addRoutes({
+      path: '/otp/send',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('SendOTPInt', sendOTPFn)
+    });
+
+    // Verify OTP Lambda
+    const verifyOTPFn = new NodejsFunction(this, 'VerifyOTPFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'verifyOTP', 'index.mjs')
+    });
+    OTPCodes.grantReadWriteData(verifyOTPFn);
+    api.addRoutes({
+      path: '/otp/verify',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('VerifyOTPInt', verifyOTPFn)
     });
 
     new CfnOutput(this, 'ApiUrl', { value: api.apiEndpoint });

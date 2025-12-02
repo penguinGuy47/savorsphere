@@ -3,7 +3,8 @@ import { getCachedMenu, setCachedMenu } from './menuCache';
 
 // 1. Next.js Environment Variable Update:
 // Next.js requires PUBLIC environment variables to be prefixed with NEXT_PUBLIC_
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://j0xei88zi7.execute-api.us-east-2.amazonaws.com/prod';
+// HTTP API (v2) doesn't use stage prefixes like /prod - routes are directly on the base URL
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://b850esmck5.execute-api.us-east-2.amazonaws.com';
 
 // 2. Convert to async/await for Server Component compatibility
 export const getMenu = async () => {
@@ -59,5 +60,15 @@ export const createOrder = async (data) => {
 
 export const getOrder = async (id) => {
     const res = await axios.get(`${API_BASE}/order/${id}`);
+    return res.data;
+};
+
+export const sendOTP = async (phone) => {
+    const res = await axios.post(`${API_BASE}/otp/send`, { phone });
+    return res.data;
+};
+
+export const verifyOTP = async (phone, otp) => {
+    const res = await axios.post(`${API_BASE}/otp/verify`, { phone, otp });
     return res.data;
 };

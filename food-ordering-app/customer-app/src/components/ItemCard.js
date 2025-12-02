@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCart } from '@/context/CartContext'; 
 
 function ItemCard({ item }) {
-    const { cart, addToCart } = useCart();
+    const { cart, addToCart, setIsCartOpen } = useCart();
     const isLunchCategory = item.category === 'Lunch';
     const [isMobileOrTablet, setIsMobileOrTablet] = useState(false);
 
@@ -66,6 +66,12 @@ function ItemCard({ item }) {
         const itemToAdd = JSON.parse(JSON.stringify(item));
 
         addToCart(itemToAdd);
+        
+        // Open cart preview on desktop when adding item
+        if (typeof window !== 'undefined' && window.innerWidth >= 768) {
+            setIsCartOpen(true);
+        }
+        
         console.log('Added to cart:', itemToAdd);
     };
 
@@ -77,22 +83,29 @@ function ItemCard({ item }) {
     };
 
     const cardContent = (
-        <div className="flex justify-between items-center p-4 border-b hover:bg-gray-50 cursor-pointer">
+        <div className="flex justify-between items-center p-4 border-b hover:bg-gray-50 cursor-pointer transition-all duration-200 ease-out">
             <div className="flex-1 mr-4">
-                <h3 className="font-semibold text-lg">{item.name}</h3>
+                <h3 className="font-semibold text-lg transition-colors duration-200">{item.name}</h3>
                 {item.description && <p className="text-gray-600 text-sm mt-1">{item.description}</p>}
                 <p className="font-bold mt-2">${item.price ? item.price.toFixed(2) : 'N/A'}</p>
             </div>
             <div className="relative">
-                {item.image && <img src={item.image} alt={item.name} className="w-28 h-28 object-cover rounded-md" />}
+                {item.image && (
+                    <img 
+                        src={item.image} 
+                        alt={item.name} 
+                        className="w-28 h-28 object-cover rounded-md transition-transform duration-200 group-hover:scale-105" 
+                    />
+                )}
                 <button 
-                    onClick={handleAddToCart} 
-                    className={`absolute -bottom-3 -right-3 bg-white rounded-full w-10 h-10 flex items-center justify-center shadow-lg transition-transform transform hover:scale-110 z-10 ${
+                    onClick={handleAddToCart}
+                    data-item-card-button
+                    className={`absolute -bottom-3 -right-3 bg-white rounded-full w-10 h-10 flex items-center justify-center shadow-lg transition-all duration-200 transform hover:scale-110 active:scale-95 z-10 ${
                         showQuantity ? 'bg-[#ef4444] text-white' : ''
                     }`}
                     aria-label={isLunchCategory || isMobileOrTablet ? `View ${item.name} details` : `Add ${item.name} to cart`}
                 >
-                    <span className={`text-xl font-semibold ${showQuantity ? 'text-black' : 'text-gray-800'}`}>
+                    <span className={`text-xl font-semibold transition-colors duration-200 ${showQuantity ? 'text-black' : 'text-gray-800'}`}>
                         {showQuantity ? currentQuantity : '+'}
                     </span>
                 </button>
@@ -102,7 +115,12 @@ function ItemCard({ item }) {
 
     // All items are clickable and link to their detail page
     return (
-        <Link href={`/item/${item.itemId}`} className="block" onClick={handleLinkClick}>
+        <Link 
+            href={`/item/${item.itemId}`} 
+            className="block group" 
+            onClick={handleLinkClick}
+            prefetch={true}
+        >
             {cardContent}
         </Link>
     );

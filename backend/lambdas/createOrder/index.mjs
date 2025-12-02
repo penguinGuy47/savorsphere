@@ -1,5 +1,6 @@
 import { DynamoDBClient, PutItemCommand, BatchWriteItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
+import { extractRestaurantId, injectRestaurantIdForWrite } from '../utils/inject-restaurant-id.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -18,6 +19,10 @@ function toNumber(value, fallback = 0) {
 export const handler = async (event) => {
   try {
     const body = event?.body ? JSON.parse(event.body) : {};
+    
+    // MULTI-TENANT: Extract restaurantId from event context
+    const restaurantId = extractRestaurantId(event);
+    
     const {
       items = [],
       total: clientTotal = 0,
@@ -33,10 +38,15 @@ export const handler = async (event) => {
     } = body;
 
     // Load settings to compute tax and ETA (fallbacks provided)
+    // MULTI-TENANT: Use restaurantId for settings lookup if available
+    const settingId = restaurantId 
+      ? (restaurantId.startsWith('restaurant-config') ? restaurantId : `restaurant-config-${restaurantId}`)
+      : "restaurant-config";
+    
     const settingsRes = await ddb.send(
       new GetItemCommand({
         TableName: TABLES.SETTINGS,
-        Key: { settingId: { S: "restaurant-config" } },
+        Key: { settingId: { S: settingId } },
       })
     );
     const settings = settingsRes.Item ? unmarshall(settingsRes.Item) : {};
@@ -55,7 +65,7 @@ export const handler = async (event) => {
     const createdAt = new Date().toISOString();
 
     // Persist order header
-    const orderRecord = {
+    let orderRecord = {
       orderId,
       createdAt,
       status: "paid",
@@ -69,6 +79,11 @@ export const handler = async (event) => {
       paymentId,
       customer: { name, phone, email, address, table, instructions },
     };
+    
+    // MULTI-TENANT: Always inject restaurantId on write
+    if (restaurantId) {
+      orderRecord = injectRestaurantIdForWrite(orderRecord, restaurantId);
+    }
 
     await ddb.send(
       new PutItemCommand({
@@ -83,20 +98,26 @@ export const handler = async (event) => {
       for (let i = 0; i < items.length; i += 25) {
         const slice = items.slice(i, i + 25);
         const RequestItems = {
-          [TABLES.ORDER_ITEMS]: slice.map((it, idx) => ({
-            PutRequest: {
-              Item: marshall(
-                {
-                  orderId,
-                  itemId: String(it.itemId ?? idx),
-                  name: it.name,
-                  price: toNumber(it.price),
-                  quantity: toNumber(it.quantity, 0),
-                },
-                { removeUndefinedValues: true }
-              ),
-            },
-          })),
+          [TABLES.ORDER_ITEMS]: slice.map((it, idx) => {
+            let orderItem = {
+              orderId,
+              itemId: String(it.itemId ?? idx),
+              name: it.name,
+              price: toNumber(it.price),
+              quantity: toNumber(it.quantity, 0),
+            };
+            
+            // MULTI-TENANT: Always inject restaurantId on write
+            if (restaurantId) {
+              orderItem = injectRestaurantIdForWrite(orderItem, restaurantId);
+            }
+            
+            return {
+              PutRequest: {
+                Item: marshall(orderItem, { removeUndefinedValues: true }),
+              },
+            };
+          }),
         };
         await ddb.send(new BatchWriteItemCommand({ RequestItems }));
       }
@@ -104,7 +125,7 @@ export const handler = async (event) => {
 
     // Persist payment
     if (paymentId) {
-      const paymentRecord = {
+      let paymentRecord = {
         paymentId,
         orderId,
         amount: total,
@@ -112,6 +133,12 @@ export const handler = async (event) => {
         status: "succeeded",
         createdAt,
       };
+      
+      // MULTI-TENANT: Always inject restaurantId on write
+      if (restaurantId) {
+        paymentRecord = injectRestaurantIdForWrite(paymentRecord, restaurantId);
+      }
+      
       await ddb.send(
         new PutItemCommand({
           TableName: TABLES.PAYMENTS,

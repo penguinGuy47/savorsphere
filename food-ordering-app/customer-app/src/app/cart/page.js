@@ -33,13 +33,13 @@ export default function CartPage() {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-2xl mx-auto text-center">
-          <h1 className="text-3xl font-bold mb-4">Your Cart</h1>
-          <p className="text-gray-500 mb-8">Your cart is empty.</p>
+          <h1 className="text-3xl font-bold mb-4">Your Order</h1>
+          <p className="text-gray-500 mb-8">Add an item from the menu to start your order.</p>
           <button
             onClick={() => router.push('/')}
-            className="bg-[#ef4444] text-white px-6 py-3 rounded-full font-semibold hover:bg-[#dc2626] transition-colors"
+            className="bg-[#677D6A] text-white px-6 py-3 rounded-full font-semibold hover:bg-[#D6BD98] transition-colors"
           >
-            Continue Shopping
+            Continue Ordering
           </button>
         </div>
       </div>
@@ -49,8 +49,17 @@ export default function CartPage() {
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="max-w-2xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6">Your Cart</h1>
-        
+        <h1 className="text-3xl font-bold mb-6">Your Order</h1>
+
+        <button
+          onClick={() => router.push('/')}
+          className="text-[#677D6A] hover:text-[#D6BD98] transition-colors"
+        >
+          ← Continue Ordering
+        </button>
+
+        <div className="border-b border-gray-200 my-4"></div>
+
         <div className="bg-white rounded-lg shadow-sm mb-6">
           {cart.map((item) => {
             const itemTotal = (Number(item.price) * Number(item.quantity || 0)).toFixed(2);
@@ -83,7 +92,7 @@ export default function CartPage() {
                     {optionsText && (
                       <div className="text-sm text-gray-600 mt-1">{optionsText}</div>
                     )}
-                    <div className="text-lg font-bold text-[#ef4444] mt-2">
+                    <div className="text-lg font-bold text-black mt-2">
                       ${Number(item.price).toFixed(2)}
                     </div>
                   </div>
@@ -142,18 +151,11 @@ export default function CartPage() {
 
           <button
             onClick={() => router.push('/checkout')}
-            className="w-full bg-[#ef4444] text-white py-4 px-6 rounded-full font-semibold text-lg hover:bg-[#dc2626] transition-colors"
+            className="w-full bg-[#1A3636] text-white py-4 px-6 rounded-full font-semibold text-lg hover:bg-[#40534C] transition-colors"
           >
             Proceed to Checkout
           </button>
         </div>
-
-        <button
-          onClick={() => router.push('/')}
-          className="text-[#ef4444] hover:text-[#dc2626] transition-colors"
-        >
-          ← Continue Shopping
-        </button>
       </div>
     </div>
   );

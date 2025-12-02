@@ -1,24 +1,23 @@
-import logo from './logo.svg';
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import Dashboard from './pages/Dashboard';
+import KitchenView from './pages/KitchenView';
+import MenuView from './pages/MenuView';
 import './App.css';
 
 function App() {
+  // Default restaurant ID for demo purposes
+  const DEFAULT_RESTAURANT_ID = 'demo123';
+
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
+    <Router>
+      <Routes>
+        <Route path="/" element={<Navigate to={`/${DEFAULT_RESTAURANT_ID}`} replace />} />
+        <Route path="/:restaurantId" element={<Dashboard />} />
+        <Route path="/:restaurantId/kitchen" element={<KitchenView />} />
+        <Route path="/:restaurantId/menu" element={<MenuView />} />
+      </Routes>
+    </Router>
   );
 }
 

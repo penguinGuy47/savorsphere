@@ -1,0 +1,159 @@
+.call-logs {
+  width: 100%;
+}
+
+.call-logs-header {
+  margin-bottom: 2rem;
+}
+
+.call-logs-header h2 {
+  font-size: 1.8rem;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+}
+
+.section-description {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.search-section {
+  margin-bottom: 1.5rem;
+}
+
+.search-input {
+  width: 100%;
+  padding: 1rem;
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 1rem;
+  min-height: 44px;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent-green);
+}
+
+.calls-table-container {
+  background-color: var(--bg-primary);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow-x: auto;
+  margin-bottom: 2rem;
+}
+
+.calls-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.calls-table thead {
+  background-color: var(--bg-secondary);
+}
+
+.calls-table th {
+  padding: 1rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--border-color);
+}
+
+.calls-table td {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.calls-table tbody tr:hover {
+  background-color: var(--bg-secondary);
+}
+
+.phone-number {
+  font-family: monospace;
+  color: var(--text-primary);
+}
+
+.order-total {
+  font-weight: 600;
+  color: var(--accent-green);
+}
+
+.no-order {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.play-btn {
+  padding: 0.5rem 1rem;
+  background-color: var(--accent-blue);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-height: 36px;
+}
+
+.play-btn:hover {
+  background-color: #2563eb;
+  transform: translateY(-1px);
+}
+
+.no-calls {
+  text-align: center;
+  padding: 3rem;
+  color: var(--text-secondary);
+}
+
+.call-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+}
+
+.stat-card {
+  padding: 1.5rem;
+  background-color: var(--bg-primary);
+  border-radius: 8px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+
+.stat-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  margin-bottom: 0.5rem;
+}
+
+.stat-label {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 768px) {
+  .calls-table {
+    font-size: 0.85rem;
+  }
+
+  .calls-table th,
+  .calls-table td {
+    padding: 0.75rem 0.5rem;
+  }
+
+  .play-btn {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+  }
+
+  .call-stats {
+    grid-template-columns: 1fr;
+  }
+}
+
+

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import CategoryTabs from '@/components/CategoryTabs';
 import ItemCard from '@/components/ItemCard';
-import { getMenu } from '@/services/api';
-import { mockMenu } from '@/utils/mocks'; // Fallback to mocks
+import { getMenu } from '@/lib/api';
+import { mockMenu } from '@/lib/mocks'; // Fallback to mocks
+// Note: Hours are stored in admin dashboard's localStorage, not accessible here
 
 function MenuPage() {
     const [menuItems, setMenuItems] = useState([]);
@@ -11,7 +12,7 @@ function MenuPage() {
 
     useEffect(() => {
         console.log('🔄 Starting menu fetch...');
-        
+        // Note: Hours check is handled by admin dashboard - customer app can always show menu
         getMenu()
             .then((data) => {
                 console.log('✅ Raw API response:', data);
