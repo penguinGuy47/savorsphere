@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import { getSettings, updateSettings } from '../../services/api';
+import React, { useState } from 'react';
 import './HoursSettings.css';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -21,55 +20,6 @@ function HoursSettings({ restaurantId }) {
     voiceGreeting: 'Welcome to our restaurant! How can I help you today?',
   });
 
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveMessage, setSaveMessage] = useState(null);
-
-  // Load settings and hours on mount
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        setIsLoading(true);
-        
-        // Load hours from localStorage (not saved to DynamoDB)
-        const hoursKey = `restaurant-hours-${restaurantId || 'default'}`;
-        const savedHours = localStorage.getItem(hoursKey);
-        if (savedHours) {
-          try {
-            const parsedHours = JSON.parse(savedHours);
-            setHours(parsedHours);
-          } catch (e) {
-            console.error('Error parsing saved hours:', e);
-          }
-        }
-        
-        // Load settings from DynamoDB
-        if (restaurantId) {
-          const data = await getSettings(restaurantId);
-          
-          // Map DynamoDB fields to frontend state
-          if (data) {
-            setSettings({
-              acceptDelivery: data.deliveryEnabled ?? true,
-              minDeliveryOrder: data.minDeliveryOrder ?? 30,
-              deliveryFee: data.deliveryFee ?? 4,
-              taxRate: data.taxRate ?? 8.875,
-              autoCreditCardFee: data.autoCreditCardFee ?? true,
-              voiceGreeting: data.voiceGreeting || 'Welcome to our restaurant! How can I help you today?',
-            });
-          }
-        }
-      } catch (error) {
-        console.error('Error loading settings:', error);
-        // Keep default values on error
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadData();
-  }, [restaurantId]);
-
   const handleDayToggle = (day) => {
     setHours({
       ...hours,
@@ -88,59 +38,14 @@ function HoursSettings({ restaurantId }) {
     setSettings({ ...settings, [field]: value });
   };
 
-  const handleSave = async () => {
-    if (!restaurantId) {
-      alert('Error: Restaurant ID is required');
-      return;
-    }
-
-    setIsSaving(true);
-    setSaveMessage(null);
-
-    try {
-      // Save hours to localStorage (not DynamoDB)
-      const hoursKey = `restaurant-hours-${restaurantId}`;
-      localStorage.setItem(hoursKey, JSON.stringify(hours));
-      
-      // Map frontend settings to DynamoDB fields (excluding hours)
-      const settingsToSave = {
-        deliveryEnabled: settings.acceptDelivery,
-        pickupEnabled: true, // Default to true
-        dineInEnabled: true, // Default to true (can be added to UI later)
-        minDeliveryOrder: settings.minDeliveryOrder,
-        deliveryFee: settings.deliveryFee,
-        taxRate: settings.taxRate,
-        autoCreditCardFee: settings.autoCreditCardFee,
-        voiceGreeting: settings.voiceGreeting,
-      };
-
-      await updateSettings(settingsToSave, restaurantId);
-      
-      setSaveMessage({ type: 'success', text: 'Settings and hours saved successfully!' });
-      setTimeout(() => setSaveMessage(null), 3000);
-    } catch (error) {
-      console.error('Error saving settings:', error);
-      setSaveMessage({ type: 'error', text: `Failed to save settings: ${error.message}` });
-    } finally {
-      setIsSaving(false);
-    }
+  const handleSave = () => {
+    // Save to backend
+    console.log('Saving hours and settings:', { hours, settings });
+    alert('Settings saved!');
   };
-
-  if (isLoading) {
-    return (
-      <div className="hours-settings">
-        <div style={{ textAlign: 'center', padding: '2rem' }}>Loading settings...</div>
-      </div>
-    );
-  }
 
   return (
     <div className="hours-settings">
-      {saveMessage && (
-        <div className={`save-message ${saveMessage.type}`}>
-          {saveMessage.text}
-        </div>
-      )}
       <div className="section">
         <h2>Business Hours</h2>
         <p className="section-description">
@@ -285,16 +190,9 @@ function HoursSettings({ restaurantId }) {
       </div>
 
       <div className="save-section">
-        <button 
-          className="save-btn" 
-          onClick={handleSave}
-          disabled={isSaving}
-        >
-          {isSaving ? '💾 Saving...' : '💾 Save All Settings'}
+        <button className="save-btn" onClick={handleSave}>
+          💾 Save All Settings
         </button>
-        <p className="save-note">
-          Note: Business hours are stored locally and not saved to the database.
-        </p>
       </div>
     </div>
   );

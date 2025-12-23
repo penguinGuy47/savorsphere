@@ -1,6 +1,5 @@
 // Use the same API base URL as customer app
-// HTTP API (v2) doesn't use stage prefixes like /prod - routes are directly on the base URL
-const API_BASE = process.env.REACT_APP_API_URL || 'https://b850esmck5.execute-api.us-east-2.amazonaws.com';
+const API_BASE = process.env.REACT_APP_API_URL || 'https://j0xei88zi7.execute-api.us-east-2.amazonaws.com/prod';
 
 export const getMenu = async () => {
   try {
@@ -16,12 +15,9 @@ export const getMenu = async () => {
   }
 };
 
-export const getSettings = async (restaurantId = null) => {
+export const getSettings = async () => {
   try {
-    const url = restaurantId 
-      ? `${API_BASE}/settings?restaurantId=${encodeURIComponent(restaurantId)}`
-      : `${API_BASE}/settings`;
-    const res = await fetch(url);
+    const res = await fetch(`${API_BASE}/settings`);
     if (!res.ok) {
       throw new Error(`HTTP error! status: ${res.status}`);
     }
@@ -29,39 +25,6 @@ export const getSettings = async (restaurantId = null) => {
     return data;
   } catch (error) {
     console.error('Error fetching settings:', error);
-    throw error;
-  }
-};
-
-export const updateSettings = async (settings, restaurantId = null) => {
-  try {
-    const url = restaurantId 
-      ? `${API_BASE}/settings?restaurantId=${encodeURIComponent(restaurantId)}`
-      : `${API_BASE}/settings`;
-    const res = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ ...settings, restaurantId }),
-    });
-    
-    if (!res.ok) {
-      const errorText = await res.text();
-      let errorMessage = `HTTP error! status: ${res.status}`;
-      try {
-        const errorJson = JSON.parse(errorText);
-        errorMessage = errorJson.error || errorMessage;
-      } catch (e) {
-        errorMessage = errorText || errorMessage;
-      }
-      throw new Error(errorMessage);
-    }
-    
-    const data = await res.json();
-    return data;
-  } catch (error) {
-    console.error('Error updating settings:', error);
     throw error;
   }
 };
@@ -139,139 +102,24 @@ export const getOrders = async (filters = {}) => {
   }
 };
 
-export const updateOrderStatus = async (orderId, status, acceptedAt = null) => {
+export const updateOrderStatus = async (orderId, status) => {
   try {
-    const body = { status };
-    if (acceptedAt) {
-      body.acceptedAt = acceptedAt;
-    }
-    
-    const res = await fetch(`${API_BASE}/order/${orderId}`, {
-      method: 'PATCH',
+    // Note: You'll need to create an updateOrderStatus endpoint in the backend
+    // For now, this is a placeholder
+    const res = await fetch(`${API_BASE}/orders/${orderId}/status`, {
+      method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ status }),
     });
-    
     if (!res.ok) {
-      const errorText = await res.text();
-      let errorMessage = `HTTP error! status: ${res.status}`;
-      try {
-        const errorJson = JSON.parse(errorText);
-        errorMessage = errorJson.error || errorMessage;
-      } catch (e) {
-        errorMessage = errorText || errorMessage;
-      }
-      throw new Error(errorMessage);
+      throw new Error(`HTTP error! status: ${res.status}`);
     }
-    
     const data = await res.json();
     return data;
   } catch (error) {
     console.error('Error updating order status:', error);
-    throw error;
-  }
-};
-
-// Menu Item CRUD operations
-export const createMenuItem = async (menuItem, restaurantId = null) => {
-  try {
-    // MULTI-TENANT: Include restaurantId in request body if provided
-    const requestBody = restaurantId 
-      ? { ...menuItem, restaurantId }
-      : menuItem;
-    
-    const res = await fetch(`${API_BASE}/menu`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-    
-    if (!res.ok) {
-      const errorText = await res.text();
-      let errorMessage = `HTTP error! status: ${res.status}`;
-      try {
-        const errorJson = JSON.parse(errorText);
-        errorMessage = errorJson.error || errorMessage;
-      } catch (e) {
-        errorMessage = errorText || errorMessage;
-      }
-      throw new Error(errorMessage);
-    }
-    
-    const data = await res.json();
-    return data;
-  } catch (error) {
-    console.error('Error creating menu item:', error);
-    throw error;
-  }
-};
-
-export const updateMenuItem = async (menuItemId, updates, restaurantId = null) => {
-  try {
-    // MULTI-TENANT: Include restaurantId in request body if provided
-    const requestBody = restaurantId 
-      ? { ...updates, restaurantId }
-      : updates;
-    
-    const res = await fetch(`${API_BASE}/menu/${menuItemId}`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-    
-    if (!res.ok) {
-      const errorText = await res.text();
-      let errorMessage = `HTTP error! status: ${res.status}`;
-      try {
-        const errorJson = JSON.parse(errorText);
-        errorMessage = errorJson.error || errorMessage;
-      } catch (e) {
-        errorMessage = errorText || errorMessage;
-      }
-      throw new Error(errorMessage);
-    }
-    
-    const data = await res.json();
-    return data;
-  } catch (error) {
-    console.error('Error updating menu item:', error);
-    throw error;
-  }
-};
-
-export const deleteMenuItem = async (menuItemId, restaurantId = null) => {
-  try {
-    // MULTI-TENANT: Include restaurantId as query param if provided
-    const url = restaurantId 
-      ? `${API_BASE}/menu/${menuItemId}?restaurantId=${encodeURIComponent(restaurantId)}`
-      : `${API_BASE}/menu/${menuItemId}`;
-    
-    const res = await fetch(url, {
-      method: 'DELETE',
-    });
-    
-    if (!res.ok) {
-      const errorText = await res.text();
-      let errorMessage = `HTTP error! status: ${res.status}`;
-      try {
-        const errorJson = JSON.parse(errorText);
-        errorMessage = errorJson.error || errorMessage;
-      } catch (e) {
-        errorMessage = errorText || errorMessage;
-      }
-      throw new Error(errorMessage);
-    }
-    
-    const data = await res.json();
-    return data;
-  } catch (error) {
-    console.error('Error deleting menu item:', error);
     throw error;
   }
 };

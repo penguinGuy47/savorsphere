@@ -1,148 +1,136 @@
 /**
- * Multi-tenant support utilities for DynamoDB operations
+ * Multi-tenant restaurant ID utilities
  * 
- * This module provides functions to:
- * 1. Extract restaurantId from Lambda event context
- * 2. Inject restaurantId into DynamoDB items on read/write
+ * Provides functions to extract restaurantId from Lambda events and inject it
+ * into DynamoDB operations for multi-tenant data isolation.
  */
 
 /**
- * Extract restaurantId from Lambda event context
- * Checks multiple sources in order of priority:
- * 1. Path parameters (e.g., /orders/{restaurantId}/...)
- * 2. Query string parameters (e.g., ?restaurantId=...)
- * 3. Request body (parsed JSON)
- * 4. Vapi payload.assistantId (if available)
- * 
- * @param {Object} event - Lambda event object
- * @returns {string|null} - restaurantId if found, null otherwise
+ * Extract restaurantId from Lambda event
+ * Checks multiple sources: headers, query params, request context, body metadata
  */
 export function extractRestaurantId(event) {
-  // 1. Check path parameters
+  // Check headers (API Gateway HTTP API)
+  if (event?.headers?.['x-restaurant-id']) {
+    return String(event.headers['x-restaurant-id']);
+  }
+  if (event?.headers?.['X-Restaurant-Id']) {
+    return String(event.headers['X-Restaurant-Id']);
+  }
+
+  // Check query parameters
+  const queryParams = event?.queryStringParameters || {};
+  if (queryParams.restaurantId) {
+    return String(queryParams.restaurantId);
+  }
+
+  // Check path parameters (API Gateway REST API)
   if (event?.pathParameters?.restaurantId) {
     return String(event.pathParameters.restaurantId);
   }
 
-  // 2. Check query string parameters
-  if (event?.queryStringParameters?.restaurantId) {
-    return String(event.queryStringParameters.restaurantId);
+  // Check request context (API Gateway custom authorizer)
+  if (event?.requestContext?.authorizer?.restaurantId) {
+    return String(event.requestContext.authorizer.restaurantId);
   }
 
-  // 3. Check request body (if parsed)
+  // Check body metadata (for Vapi calls)
   if (event?.body) {
     try {
-      const body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
-      if (body?.restaurantId) {
-        return String(body.restaurantId);
+      const parsed = typeof event.body === 'string' ? JSON.parse(event.body) : event.body;
+      if (parsed?.call?.metadata?.restaurantId) {
+        return String(parsed.call.metadata.restaurantId);
       }
-      // Check for Vapi payload structure
-      if (body?.payload?.assistantId) {
-        return String(body.payload.assistantId);
+      if (parsed?.assistant?.metadata?.restaurantId) {
+        return String(parsed.assistant.metadata.restaurantId);
+      }
+      if (parsed?.assistantId) {
+        return String(parsed.assistantId);
+      }
+      if (parsed?.restaurantId) {
+        return String(parsed.restaurantId);
       }
     } catch (e) {
-      // Body not JSON, skip
+      // Ignore JSON parse errors
     }
   }
 
-  // 4. Check Vapi webhook structure
-  if (event?.assistantId) {
-    return String(event.assistantId);
+  // Check event metadata directly
+  if (event?.restaurantId) {
+    return String(event.restaurantId);
   }
 
-  // Default: return null if not found
-  // In production, you might want to throw an error or use a default tenant
   return null;
 }
 
 /**
- * Inject restaurantId into a DynamoDB item (unmarshalled)
- * Uses lazy injection pattern: only adds if missing
- * 
- * @param {Object} item - Unmarshalled DynamoDB item
- * @param {string} restaurantId - Restaurant ID to inject
- * @returns {Object} - Item with restaurantId injected
+ * Inject restaurantId into an object before writing to DynamoDB
+ * Adds restaurantId field if not already present
  */
-export function injectRestaurantId(item, restaurantId) {
-  if (!item || !restaurantId) {
-    return item;
-  }
-
-  // Lazy injection: only add if missing
-  if (!item.restaurantId) {
-    item.restaurantId = String(restaurantId);
-  }
-
-  return item;
+export function injectRestaurantIdForWrite(obj, restaurantId) {
+  if (!restaurantId || !obj) return obj;
+  
+  return {
+    ...obj,
+    restaurantId: String(restaurantId)
+  };
 }
 
 /**
- * Inject restaurantId into multiple items (array)
- * 
- * @param {Array} items - Array of unmarshalled DynamoDB items
- * @param {string} restaurantId - Restaurant ID to inject
- * @returns {Array} - Items with restaurantId injected
+ * Inject restaurantId into a single object (alias for injectRestaurantIdForWrite)
+ */
+export function injectRestaurantId(obj, restaurantId) {
+  return injectRestaurantIdForWrite(obj, restaurantId);
+}
+
+/**
+ * Inject restaurantId into an array of items (batch operation)
+ * Useful for read operations that need to add restaurantId to legacy data
  */
 export function injectRestaurantIdBatch(items, restaurantId) {
-  if (!Array.isArray(items) || !restaurantId) {
-    return items;
-  }
-
-  return items.map(item => injectRestaurantId(item, restaurantId));
+  if (!restaurantId || !Array.isArray(items)) return items;
+  
+  return items.map(item => ({
+    ...item,
+    restaurantId: item.restaurantId || String(restaurantId)
+  }));
 }
 
 /**
- * Inject restaurantId into item before marshalling for write operations
- * Always adds restaurantId (not lazy) for writes
- * 
- * @param {Object} item - Item to be written to DynamoDB
- * @param {string} restaurantId - Restaurant ID to inject
- * @returns {Object} - Item with restaurantId always set
- */
-export function injectRestaurantIdForWrite(item, restaurantId) {
-  if (!item || !restaurantId) {
-    return item;
-  }
-
-  // Always inject for writes (not lazy)
-  item.restaurantId = String(restaurantId);
-  return item;
-}
-
-/**
- * Add restaurantId filter to DynamoDB query/scan operations
- * 
- * @param {Object} params - DynamoDB QueryCommand or ScanCommand parameters
- * @param {string} restaurantId - Restaurant ID to filter by
- * @returns {Object} - Updated parameters with restaurantId filter
+ * Add restaurantId filter to DynamoDB query/scan parameters
+ * Modifies params in-place to add FilterExpression or KeyConditionExpression
  */
 export function addRestaurantIdFilter(params, restaurantId) {
-  if (!restaurantId) {
-    return params;
-  }
-
-  // For QueryCommand: Add FilterExpression (not KeyConditionExpression)
-  // For ScanCommand: Add FilterExpression
-  const restaurantFilter = 'restaurantId = :restaurantId';
+  if (!restaurantId || !params) return;
   
-  // Initialize ExpressionAttributeValues if needed
-  if (!params.ExpressionAttributeValues) {
-    params.ExpressionAttributeValues = {};
-  }
-  params.ExpressionAttributeValues[':restaurantId'] = { S: String(restaurantId) };
-
-  // Handle existing FilterExpression
-  if (params.FilterExpression) {
-    params.FilterExpression = `${params.FilterExpression} AND ${restaurantFilter}`;
-  } else {
-    // If KeyConditionExpression exists (QueryCommand), add FilterExpression separately
-    if (params.KeyConditionExpression) {
-      params.FilterExpression = restaurantFilter;
-    } else {
-      // For ScanCommand, set FilterExpression
-      params.FilterExpression = restaurantFilter;
+  const restaurantIdValue = String(restaurantId);
+  
+  // If there's already a KeyConditionExpression, add restaurantId to it
+  if (params.KeyConditionExpression) {
+    // Check if restaurantId is part of the key
+    const hasRestaurantIdInKey = params.KeyConditionExpression.includes('restaurantId');
+    
+    if (!hasRestaurantIdInKey) {
+      // Add restaurantId filter to existing expression
+      params.FilterExpression = params.FilterExpression 
+        ? `(${params.FilterExpression}) AND restaurantId = :restaurantId`
+        : 'restaurantId = :restaurantId';
+      
+      if (!params.ExpressionAttributeValues) {
+        params.ExpressionAttributeValues = {};
+      }
+      params.ExpressionAttributeValues[':restaurantId'] = { S: restaurantIdValue };
     }
+  } else {
+    // For Scan operations, use FilterExpression
+    params.FilterExpression = params.FilterExpression
+      ? `(${params.FilterExpression}) AND restaurantId = :restaurantId`
+      : 'restaurantId = :restaurantId';
+    
+    if (!params.ExpressionAttributeValues) {
+      params.ExpressionAttributeValues = {};
+    }
+    params.ExpressionAttributeValues[':restaurantId'] = { S: restaurantIdValue };
   }
-
-  return params;
 }
 

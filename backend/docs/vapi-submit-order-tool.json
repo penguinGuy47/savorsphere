@@ -1,0 +1,96 @@
+{
+  "type": "function",
+  "function": {
+    "name": "submit_order",
+    "description": "Submit the pizza order. Backend will calculate prices, so only send structure (size, crust, toppings with portion tags, modifiers). The response will include the authoritative total.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "orderType": {
+          "type": "string",
+          "enum": ["pickup", "delivery"],
+          "description": "Order type: pickup or delivery"
+        },
+        "customerPhone": {
+          "type": "string",
+          "description": "Customer phone number (10 digits)"
+        },
+        "deliveryAddress": {
+          "type": "string",
+          "description": "Full delivery address (only for delivery orders)"
+        },
+        "pizzas": {
+          "type": "array",
+          "description": "Array of pizza objects",
+          "items": {
+            "type": "object",
+            "properties": {
+              "size": {
+                "type": "string",
+                "enum": ["Personal", "Small", "Medium", "Large"],
+                "description": "Pizza size"
+              },
+              "crust": {
+                "type": "string",
+                "enum": ["Thin", "Regular", "Double", "Stuffed", "Gluten-Free"],
+                "description": "Crust type. Gluten-Free only allowed for Small size."
+              },
+              "wholeToppings": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Toppings for the whole pizza. Append |extra for extra portion, |light for light portion, |no to remove, |onTop for on-top-only placement. Examples: 'Pepperoni', 'Pepperoni|extra', 'Mushrooms|light', 'Onions|onTop'."
+              },
+              "leftHalfToppings": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Toppings for left half only. Same tagging rules apply."
+              },
+              "rightHalfToppings": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Toppings for right half only. Same tagging rules apply."
+              },
+              "modifiers": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Pizza-wide modifiers. Valid values: 'well done', 'light bake', 'extra crispy', 'half-baked', 'extra cheese', 'light cheese', 'no cheese', 'half cheese', 'extra sauce', 'light sauce', 'no sauce', 'sauce on side', 'extra oregano', 'no seasoning', 'square cut', 'uncut'."
+              },
+              "notes": {
+                "type": "string",
+                "description": "Free-form notes for this pizza: allergies, special requests, etc."
+              }
+            },
+            "required": ["size"]
+          }
+        },
+        "sides": {
+          "type": "array",
+          "description": "Array of side items",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Side item name (e.g., Fries, Garlic Knots, Wings)"
+              },
+              "quantity": {
+                "type": "integer",
+                "description": "Quantity of this side (default 1)"
+              }
+            },
+            "required": ["name"]
+          }
+        }
+      },
+      "required": ["orderType", "customerPhone", "pizzas"]
+    }
+  },
+  "server": {
+    "url": "https://YOUR_API_GATEWAY_URL/vapi/webhook"
+  }
+}
+
+
+
+
+

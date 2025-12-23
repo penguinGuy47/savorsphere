@@ -3,9 +3,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import CategoryTabs from './CategoryTabs';
 import ItemCard from './ItemCard';
-import { getMenu, getSettings } from '@/lib/api';
+import { getMenu } from '@/lib/api';
 import { mockMenu } from '@/lib/mocks';
-import { isStoreOpen } from '@/lib/storeHours';
 
 // Sanitize category names to valid HTML IDs
 const sanitizeId = (str) => {
@@ -18,39 +17,12 @@ export default function MenuPageClient() {
   const [categories, setCategories] = useState([]);
   const [activeCategory, setActiveCategory] = useState('All');
   const [isLoading, setIsLoading] = useState(true);
-  const [storeHours, setStoreHours] = useState(null);
   const stickyHeaderRef = useRef(null);
   const isManualCategoryChangeRef = useRef(false);
-
-  // Load store hours on mount
-  useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        const settings = await getSettings();
-        if (settings && settings.hours) {
-          setStoreHours(settings.hours);
-        }
-      } catch (error) {
-        console.error('Error loading store hours:', error);
-        // Continue without hours check (assume open)
-      }
-    };
-    
-    loadSettings();
-  }, []);
 
   useEffect(() => {
     // Fetch menu on client-side to use localStorage cache
     async function fetchMenu() {
-      // Check if store is open before fetching menu
-      if (storeHours !== null && !isStoreOpen(storeHours)) {
-        console.log('Store is closed. Skipping menu fetch.');
-        setIsLoading(false);
-        setGroupedItems({});
-        setCategories(['All']);
-        return;
-      }
-      
       try {
         setIsLoading(true);
         const data = await getMenu();

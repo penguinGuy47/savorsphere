@@ -1,7 +1,6 @@
 import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
 import { DynamoDBClient, PutItemCommand, GetItemCommand, DeleteItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { extractRestaurantId, injectRestaurantIdForWrite } from '../utils/inject-restaurant-id.mjs';
 
 const snsClient = new SNSClient({ region: "us-east-2" });
 const ddbClient = new DynamoDBClient({ region: "us-east-2" });
@@ -41,31 +40,21 @@ export const handler = async (event) => {
       };
     }
 
-    // MULTI-TENANT: Extract restaurantId from event context
-    const restaurantId = extractRestaurantId(event);
-    
     const normalizedPhone = normalizePhoneNumber(phone);
     const otp = generateOTP();
     const expiresAt = Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000;
 
     // Store OTP in DynamoDB
-    let otpRecord = {
-      phone: normalizedPhone,
-      otp,
-      expiresAt,
-      attempts: 0,
-      createdAt: Date.now(),
-    };
-    
-    // MULTI-TENANT: Always inject restaurantId on write
-    if (restaurantId) {
-      otpRecord = injectRestaurantIdForWrite(otpRecord, restaurantId);
-    }
-    
     await ddbClient.send(
       new PutItemCommand({
         TableName: OTP_TABLE,
-        Item: marshall(otpRecord),
+        Item: marshall({
+          phone: normalizedPhone,
+          otp,
+          expiresAt,
+          attempts: 0,
+          createdAt: Date.now(),
+        }),
       })
     );
 

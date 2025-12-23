@@ -544,7 +544,7 @@ function KitchenView() {
                           className="action-button cancel-button"
                           onClick={() => handleCancel(order.orderId)}
                         >
-                          86'd / CANCEL
+                          CANCEL
                         </button>
                       </>
                     ) : order.status === 'accepted' ? (

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { format } from 'date-fns';
 import { getOrders, updateOrderStatus } from '../../services/api';
-import { isStoreOpenFromLocal } from '../../utils/storeHoursLocal';
 import './TodaysOrders.css';
 
 function TodaysOrders({ restaurantId }) {
@@ -14,15 +13,6 @@ function TodaysOrders({ restaurantId }) {
   const [pullDistance, setPullDistance] = useState(0);
 
   const loadOrders = async () => {
-    // Check if store is open before fetching orders (hours from localStorage)
-    if (!isStoreOpenFromLocal(restaurantId)) {
-      console.log('Store is closed. Skipping order fetch.');
-      setOrders([]);
-      setTotalRevenue(0);
-      setIsLoading(false);
-      return;
-    }
-    
     try {
       setIsLoading(true);
       const filters = {};
@@ -34,37 +24,21 @@ function TodaysOrders({ restaurantId }) {
       const data = await getOrders(filters);
       
       // Transform API data to match component expectations
-      const transformedOrders = (data.orders || []).map(order => {
-        // Safely parse date - handle invalid dates
-        let orderTime;
-        if (order.time instanceof Date) {
-          orderTime = isNaN(order.time.getTime()) ? new Date() : order.time;
-        } else {
-          const dateStr = order.createdAt || order.time || order.date;
-          if (dateStr) {
-            const parsedDate = new Date(dateStr);
-            orderTime = isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
-          } else {
-            orderTime = new Date(); // Default to now if no date
-          }
-        }
-        
-        return {
-          id: order.orderId || order.id,
-          orderId: order.orderId || order.id,
-          time: orderTime,
-          items: order.items || 'No items',
-          total: order.total || 0,
-          status: order.status || 'new',
-          phone: order.phone || '',
-          name: order.name || '',
-          email: order.email || '',
-          type: order.type || order.orderType || 'pickup',
-          address: order.address || '',
-          table: order.table || '',
-          instructions: order.instructions || '',
-        };
-      });
+      const transformedOrders = (data.orders || []).map(order => ({
+        id: order.orderId || order.id,
+        orderId: order.orderId || order.id,
+        time: order.time instanceof Date ? order.time : new Date(order.createdAt || order.time),
+        items: order.items || 'No items',
+        total: order.total || 0,
+        status: order.status || 'new',
+        phone: order.phone || '',
+        name: order.name || '',
+        email: order.email || '',
+        type: order.type || order.orderType || 'pickup',
+        address: order.address || '',
+        table: order.table || '',
+        instructions: order.instructions || '',
+      }));
       
       setOrders(transformedOrders);
       setTotalRevenue(data.totalRevenue || 0);
@@ -95,7 +69,7 @@ function TodaysOrders({ restaurantId }) {
 
   useEffect(() => {
     loadOrders();
-  }, [filter, restaurantId]); // Reload when filter changes
+  }, [filter]); // Reload when filter changes
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -132,7 +106,6 @@ function TodaysOrders({ restaurantId }) {
     if (filter === 'pickup') return order.type === 'pickup';
     if (filter === 'delivery') return order.type === 'delivery';
     if (filter === 'last-hour') {
-      if (!order.time || isNaN(order.time.getTime())) return false;
       const oneHourAgo = Date.now() - 60 * 60000;
       return order.time.getTime() > oneHourAgo;
     }
@@ -166,7 +139,7 @@ function TodaysOrders({ restaurantId }) {
       ['Time', 'Order #', 'Items', 'Total', 'Status', 'Phone', 'Type'].join(','),
       ...filteredOrders.map(order =>
         [
-          order.time && !isNaN(order.time.getTime()) ? format(order.time, 'MM/dd/yyyy HH:mm') : 'Invalid Date',
+          format(order.time, 'MM/dd/yyyy HH:mm'),
           order.id,
           `"${order.items}"`,
           order.total.toFixed(2),
@@ -284,7 +257,7 @@ function TodaysOrders({ restaurantId }) {
               ) : (
               filteredOrders.map((order) => (
                 <tr key={order.id}>
-                  <td>{order.time && !isNaN(order.time.getTime()) ? format(order.time, 'HH:mm') : '--:--'}</td>
+                  <td>{format(order.time, 'HH:mm')}</td>
                   <td className="order-id">{order.id}</td>
                   <td>{order.items}</td>
                   <td className="order-total">${order.total.toFixed(2)}</td>

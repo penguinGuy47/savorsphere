@@ -70,9 +70,4 @@ export function isCacheValid() {
   return age < CACHE_DURATION;
 }
 
-// Invalidate cache when menu items are modified
-export function invalidateMenuCache() {
-  clearMenuCache();
-}
-
 

@@ -1,0 +1,37 @@
+{
+  "type": "function",
+  "function": {
+    "name": "lookup_address",
+    "description": "Verify a delivery street address exists in the restaurant's delivery zone. Call this BEFORE confirming a delivery order to ensure the address is valid. The tool uses phonetic matching to handle similar-sounding street names (like Golf vs Gulf).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "zipCode": {
+          "type": "string",
+          "description": "5-digit ZIP code for the delivery address"
+        },
+        "streetNumber": {
+          "type": "string",
+          "description": "Street number (e.g., '54', '1234')"
+        },
+        "streetName": {
+          "type": "string", 
+          "description": "Street name as spoken by customer (e.g., 'Golf Road', 'Main Street')"
+        },
+        "spelledStreetName": {
+          "type": "string",
+          "description": "Only provide if customer spelled the street name letter by letter. Accepts 'G O L F' or 'G as in George, O, L, F' format."
+        },
+        "attempt": {
+          "type": "number",
+          "description": "Set to 1 for first attempt, 2 if customer already spelled the name and you're retrying"
+        }
+      },
+      "required": ["zipCode", "streetName", "attempt"]
+    }
+  },
+  "server": {
+    "url": "{{API_URL}}/address/lookup"
+  }
+}
+

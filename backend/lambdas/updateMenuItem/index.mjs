@@ -1,6 +1,6 @@
-import { DynamoDBClient, UpdateItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, GetItemCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { extractRestaurantId, injectRestaurantId } from '../utils/inject-restaurant-id.mjs';
+import { extractRestaurantId } from '../utils/inject-restaurant-id.mjs';
 
 const ddb = new DynamoDBClient();
 
@@ -16,7 +16,9 @@ export const handler = async (event) => {
     "Content-Type": "application/json",
   };
 
-  if (event.requestContext?.http?.method === 'OPTIONS' || event.httpMethod === 'OPTIONS') {
+  // Handle CORS preflight
+  const method = event.requestContext?.http?.method || event.httpMethod || event.requestContext?.httpMethod;
+  if (method === 'OPTIONS') {
     return {
       statusCode: 200,
       headers: corsHeaders,
@@ -25,143 +27,74 @@ export const handler = async (event) => {
   }
 
   try {
-    // MULTI-TENANT: Extract restaurantId from event context
-    const restaurantId = extractRestaurantId(event);
-    
-    const menuItemId = event.pathParameters?.menuItemId;
+    const menuItemId = event?.pathParameters?.menuItemId;
     if (!menuItemId) {
       return {
         statusCode: 400,
         headers: corsHeaders,
-        body: JSON.stringify({ error: "menuItemId is required in path" }),
+        body: JSON.stringify({ error: "Missing menuItemId" }),
       };
     }
 
     const body = event?.body ? JSON.parse(event.body) : {};
-    const {
-      name,
-      description,
-      price,
-      category,
-      available,
-      image,
-    } = body;
-
-    // Get existing item to preserve fields not being updated
-    // Try both itemId and menuItemId as keys (for backward compatibility)
-    let existingItem = {};
-    try {
-      // First try itemId (primary key)
-      let getResult = await ddb.send(
-        new GetItemCommand({
-          TableName: TABLES.MENU_ITEMS,
-          Key: { itemId: { S: String(menuItemId) } },
-        })
-      );
-      
-      // If not found, try menuItemId (for backward compatibility)
-      if (!getResult.Item) {
-        getResult = await ddb.send(
-          new GetItemCommand({
-            TableName: TABLES.MENU_ITEMS,
-            Key: { menuItemId: { S: String(menuItemId) } },
-          })
-        );
-      }
-      
-      if (getResult.Item) {
-        existingItem = unmarshall(getResult.Item);
-        
-        // MULTI-TENANT: Lazy inject restaurantId if missing (for backward compatibility)
-        if (restaurantId) {
-          existingItem = injectRestaurantId(existingItem, restaurantId);
-        }
-      } else {
-        return {
-          statusCode: 404,
-          headers: corsHeaders,
-          body: JSON.stringify({ error: "Menu item not found" }),
-        };
-      }
-    } catch (error) {
-      console.error("Error fetching existing item:", error);
-    }
-
-    // Build update expression
-    const updateExpressions = [];
-    const expressionAttributeValues = {};
-    const expressionAttributeNames = {};
-
-    if (name !== undefined) {
-      updateExpressions.push("#name = :name");
-      expressionAttributeNames["#name"] = "name";
-      expressionAttributeValues[":name"] = { S: String(name) };
-    }
-    if (description !== undefined) {
-      updateExpressions.push("#description = :description");
-      expressionAttributeNames["#description"] = "description";
-      expressionAttributeValues[":description"] = { S: String(description) };
-    }
-    if (price !== undefined) {
-      updateExpressions.push("#price = :price");
-      expressionAttributeNames["#price"] = "price";
-      expressionAttributeValues[":price"] = { N: String(Number(price)) };
-    }
-    if (category !== undefined) {
-      updateExpressions.push("#category = :category");
-      expressionAttributeNames["#category"] = "category";
-      expressionAttributeValues[":category"] = { S: String(category) };
-    }
-    if (available !== undefined) {
-      updateExpressions.push("#available = :available");
-      expressionAttributeNames["#available"] = "available";
-      expressionAttributeValues[":available"] = { BOOL: Boolean(available) };
-    }
-    if (image !== undefined) {
-      updateExpressions.push("#image = :image");
-      expressionAttributeNames["#image"] = "image";
-      expressionAttributeValues[":image"] = { S: String(image) };
-    }
-
-    // Always update updatedAt
-    updateExpressions.push("#updatedAt = :updatedAt");
-    expressionAttributeNames["#updatedAt"] = "updatedAt";
-    expressionAttributeValues[":updatedAt"] = { S: new Date().toISOString() };
     
-    // MULTI-TENANT: Always ensure restaurantId is set on update
-    if (restaurantId) {
-      updateExpressions.push("restaurantId = :restaurantId");
-      expressionAttributeValues[":restaurantId"] = { S: String(restaurantId) };
-    }
+    // MULTI-TENANT: Extract restaurantId from event context
+    const restaurantId = body.restaurantId || extractRestaurantId(event);
 
-    if (updateExpressions.length === 0) {
+    // Get existing menu item
+    const getRes = await ddb.send(
+      new GetItemCommand({
+        TableName: TABLES.MENU_ITEMS,
+        Key: { itemId: { S: String(menuItemId) } },
+      })
+    );
+
+    if (!getRes.Item) {
       return {
-        statusCode: 400,
+        statusCode: 404,
         headers: corsHeaders,
-        body: JSON.stringify({ error: "No fields to update" }),
+        body: JSON.stringify({ error: "Menu item not found" }),
       };
     }
 
-    // Use itemId as key (primary key), fallback to menuItemId for backward compatibility
-    const keyField = existingItem.itemId ? 'itemId' : 'menuItemId';
-    const keyValue = existingItem.itemId || menuItemId;
-    
-    const updateParams = {
-      TableName: TABLES.MENU_ITEMS,
-      Key: { [keyField]: { S: String(keyValue) } },
-      UpdateExpression: `SET ${updateExpressions.join(", ")}`,
-      ExpressionAttributeNames: expressionAttributeNames,
-      ExpressionAttributeValues: expressionAttributeValues,
-      ReturnValues: "ALL_NEW",
+    const existingItem = unmarshall(getRes.Item);
+
+    // MULTI-TENANT: Verify restaurantId matches if provided
+    if (restaurantId && existingItem.restaurantId && existingItem.restaurantId !== restaurantId) {
+      return {
+        statusCode: 403,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: "Forbidden: Menu item belongs to different restaurant" }),
+      };
+    }
+
+    // Merge updates with existing item
+    const updatedItem = {
+      ...existingItem,
+      ...body,
+      itemId: String(menuItemId), // Ensure itemId doesn't change
+      menuItemId: String(menuItemId), // Keep menuItemId for API compatibility
+      updatedAt: new Date().toISOString(),
     };
 
-    const updateResult = await ddb.send(new UpdateItemCommand(updateParams));
-    let updatedItem = unmarshall(updateResult.Attributes);
-    
-    // MULTI-TENANT: Lazy inject restaurantId if missing (for backward compatibility)
-    if (restaurantId) {
-      updatedItem = injectRestaurantId(updatedItem, restaurantId);
+    // Preserve createdAt if it exists
+    if (existingItem.createdAt) {
+      updatedItem.createdAt = existingItem.createdAt;
+    } else {
+      updatedItem.createdAt = updatedItem.updatedAt;
     }
+
+    // MULTI-TENANT: Ensure restaurantId is set
+    if (restaurantId) {
+      updatedItem.restaurantId = String(restaurantId);
+    }
+
+    await ddb.send(
+      new PutItemCommand({
+        TableName: TABLES.MENU_ITEMS,
+        Item: marshall(updatedItem, { removeUndefinedValues: true }),
+      })
+    );
 
     return {
       statusCode: 200,

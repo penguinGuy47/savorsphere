@@ -1,6 +1,5 @@
 import { DynamoDBClient, GetItemCommand, DeleteItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import { extractRestaurantId, injectRestaurantId, addRestaurantIdFilter } from '../utils/inject-restaurant-id.mjs';
 
 const ddbClient = new DynamoDBClient({ region: "us-east-2" });
 const OTP_TABLE = "OTPCodes";
@@ -34,19 +33,15 @@ export const handler = async (event) => {
       };
     }
 
-    // MULTI-TENANT: Extract restaurantId from event context
-    const restaurantId = extractRestaurantId(event);
-    
     const normalizedPhone = normalizePhoneNumber(phone);
 
     // Get OTP record from DynamoDB
-    // Note: OTP lookup uses phone as PK, but we can filter by restaurantId if it exists
-    const getParams = {
-      TableName: OTP_TABLE,
-      Key: marshall({ phone: normalizedPhone }),
-    };
-    
-    const { Item } = await ddbClient.send(new GetItemCommand(getParams));
+    const { Item } = await ddbClient.send(
+      new GetItemCommand({
+        TableName: OTP_TABLE,
+        Key: marshall({ phone: normalizedPhone }),
+      })
+    );
 
     if (!Item) {
       return {
@@ -59,17 +54,7 @@ export const handler = async (event) => {
       };
     }
 
-    let otpRecord = unmarshall(Item);
-    
-    // MULTI-TENANT: Lazy inject restaurantId if missing (for backward compatibility)
-    // Also validate restaurantId matches if provided
-    if (restaurantId) {
-      otpRecord = injectRestaurantId(otpRecord, restaurantId);
-      // Optional: Add validation to ensure OTP belongs to correct restaurant
-      // if (otpRecord.restaurantId && otpRecord.restaurantId !== restaurantId) {
-      //   return { statusCode: 403, ... };
-      // }
-    }
+    const otpRecord = unmarshall(Item);
 
     // Check if OTP has expired
     if (Date.now() > otpRecord.expiresAt) {

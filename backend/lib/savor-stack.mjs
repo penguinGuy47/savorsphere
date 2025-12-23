@@ -35,6 +35,9 @@ export class SavorSphereStack extends Stack {
     // OTP Codes table - create if it doesn't exist, or reference existing
     const OTPCodes = dynamodb.Table.fromTableName(this, 'OTPCodesTbl', 'OTPCodes');
 
+    // Streets by ZIP table for address lookup (phonetic matching)
+    const StreetsByZip = dynamodb.Table.fromTableName(this, 'StreetsByZipTbl', 'StreetsByZip');
+
     const api = new HttpApi(this, 'SavorHttpApi', {
       corsPreflight: {
         allowOrigins: ['*'],
@@ -233,14 +236,34 @@ export class SavorSphereStack extends Stack {
         format: 'esm',
         minify: true,
         sourceMap: false,
-        externalModules: []
+        externalModules: ['@aws-sdk/*']
       }
     });
     Orders.grantWriteData(vapiOrderWebhook);
+    OrderItems.grantReadWriteData(vapiOrderWebhook);
+    RestaurantSettings.grantReadData(vapiOrderWebhook);
     api.addRoutes({
       path: '/vapi/webhook',
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration('VapiOrderWebhookInt', vapiOrderWebhook)
+    });
+
+    // Address Lookup Lambda (phonetic/fuzzy matching for voice orders)
+    const lookupAddressFn = new NodejsFunction(this, 'LookupAddressFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'lookupAddress', 'index.mjs'),
+      environment: {
+        STREETS_TABLE: StreetsByZip.tableName,
+        // Fallback for Vapi calls that do not include assistant/call metadata
+        // Override at deploy time by setting DEFAULT_RESTAURANT_ID in your environment.
+        DEFAULT_RESTAURANT_ID: process.env.DEFAULT_RESTAURANT_ID || 'rest-001',
+      }
+    });
+    StreetsByZip.grantReadData(lookupAddressFn);
+    api.addRoutes({
+      path: '/address/lookup',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('LookupAddressInt', lookupAddressFn)
     });
 
     new CfnOutput(this, 'ApiUrl', { value: api.apiEndpoint });

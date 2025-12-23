@@ -1,0 +1,18 @@
+[
+  {
+    "restaurantId": "rest-001",
+    "name": "Pizza Palace Downtown",
+    "lat": 42.0667,
+    "lon": -87.9833,
+    "radiusMiles": 3,
+    "zipCodes": ["60005", "60004", "60006"]
+  },
+  {
+    "restaurantId": "rest-002",
+    "name": "Pizza Palace Northside",
+    "lat": 42.1050,
+    "lon": -87.9500,
+    "radiusMiles": 2.5,
+    "zipCodes": ["60062", "60015"]
+  }
+]

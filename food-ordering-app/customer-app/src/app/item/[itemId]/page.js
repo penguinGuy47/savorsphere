@@ -4,7 +4,6 @@ import { useParams, useRouter } from 'next/navigation';
 import { getMenu } from '@/lib/api';
 import { useCart } from '@/context/CartContext';
 import { mockMenu } from '@/lib/mocks';
-// Note: Hours are stored in admin dashboard's localStorage, not accessible here
 
 function ItemDetailsPage() {
     const params = useParams();
@@ -55,7 +54,6 @@ function ItemDetailsPage() {
     };
 
     useEffect(() => {
-        // Note: Hours check is handled by admin dashboard - customer app can always show menu
         getMenu()
         .then((items) => setItem(items.find((i) => i.itemId === itemId)))
         .catch(() => setItem(mockMenu.find((i) => i.itemId === itemId)));

@@ -163,9 +163,9 @@ export const handler = async (event) => {
             items = injectRestaurantIdBatch(items, restaurantId);
           }
 
-          // Format items summary
+          // Format items summary (modifiers are already included in item.name from vapiOrderWebhook)
           const itemsSummary = items
-            .map((item) => `${item.quantity}x ${item.name}`)
+            .map((item) => `${item.quantity || 1}x ${item.name}`)
             .join(", ");
 
           // Handle different field name variations
