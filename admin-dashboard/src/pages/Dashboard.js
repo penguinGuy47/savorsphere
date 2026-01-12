@@ -4,7 +4,6 @@ import TabNavigation from '../components/TabNavigation';
 import TodaysOrders from '../components/tabs/TodaysOrders';
 import CreateOrder from '../components/tabs/CreateOrder';
 import HoursSettings from '../components/tabs/HoursSettings';
-import LoyaltyPromos from '../components/tabs/LoyaltyPromos';
 import CallLogs from '../components/tabs/CallLogs';
 import Reports from '../components/tabs/Reports';
 import BillingAccount from '../components/tabs/BillingAccount';
@@ -14,7 +13,6 @@ const TABS = [
   { id: 'orders', label: "Orders", icon: '📋' },
   { id: 'create', label: 'Create Order', icon: '➕' },
   { id: 'hours', label: 'Hours & Settings', icon: '⏰' },
-  { id: 'loyalty', label: 'Loyalty & Promos', icon: '🎁' },
   { id: 'calls', label: 'Call Logs', icon: '📞' },
   { id: 'reports', label: 'Reports', icon: '📊' },
   { id: 'billing', label: 'Billing & Account', icon: '💳' },
@@ -41,8 +39,6 @@ function Dashboard() {
         return <CreateOrder restaurantId={restaurantId} />;
       case 'hours':
         return <HoursSettings restaurantId={restaurantId} />;
-      case 'loyalty':
-        return <LoyaltyPromos restaurantId={restaurantId} />;
       case 'calls':
         return <CallLogs restaurantId={restaurantId} />;
       case 'reports':

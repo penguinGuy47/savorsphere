@@ -19,6 +19,23 @@
           "type": "string",
           "description": "Full delivery address (only for delivery orders)"
         },
+        "addressStatus": {
+          "type": "string",
+          "enum": ["confirmed", "unconfirmed"],
+          "description": "Address verification state for delivery orders"
+        },
+        "callbackPhone": {
+          "type": "string",
+          "description": "Phone number to call back when address is unconfirmed"
+        },
+        "callId": {
+          "type": "string",
+          "description": "Vapi call ID for idempotency (required when addressStatus is unconfirmed)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Optional reason for placeholder order (preferred: address_unconfirmed)"
+        },
         "pizzas": {
           "type": "array",
           "description": "Array of pizza objects",
@@ -89,6 +106,16 @@
     "url": "https://YOUR_API_GATEWAY_URL/vapi/webhook"
   }
 }
+
+
+
+
+
+
+
+
+
+
 
 
 

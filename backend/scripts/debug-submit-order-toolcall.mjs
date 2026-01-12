@@ -25,20 +25,46 @@ const endpointUrl = getArg('--url', 'https://rcllq4uqrduewek56gktgprk6m0dcgaf.la
 const mode = getArg('--mode', 'args'); // "args" or "wrapper"
 
 // Minimal payload that matches the Vapi tool schema (no PII; dummy phone).
-const argsPayload = {
+const orderSize = getArg('--size', 'small'); // small, medium, large for different test sizes
+
+const smallPayload = {
   orderType: 'pickup',
-  totalCents: 1199,
   customerPhone: '+15555550123',
-  pizzas: [
-    {
-      size: 'Personal',
-      crust: 'Thin',
-      priceCents: 1199,
-      wholeToppings: ['Pepperoni']
-    }
-  ],
+  pizzas: [{ size: 'Personal', crust: 'Thin', wholeToppings: ['Pepperoni'] }],
   sides: []
 };
+
+const mediumPayload = {
+  orderType: 'delivery',
+  customerPhone: '+15555550123',
+  deliveryAddress: '123 Main St, 60008',
+  pizzas: [
+    { size: 'Large', crust: 'Thin', wholeToppings: ['Pepperoni', 'Mushrooms'] },
+    { size: 'Medium', crust: 'Thin', wholeToppings: ['Sausage'] }
+  ],
+  sides: [{ name: 'Fries', quantity: 2 }]
+};
+
+const largePayload = {
+  orderType: 'delivery',
+  customerPhone: '+15555550123',
+  deliveryAddress: '456 Oak Ave, 60008',
+  pizzas: [
+    { size: 'Large', crust: 'Thin', wholeToppings: ['Pepperoni'] },
+    { size: 'Large', crust: 'Thin', wholeToppings: ['Sausage'] },
+    { size: 'XLarge', crust: 'Double', wholeToppings: ['Cheese'] },
+    { size: 'Medium', crust: 'Thin', wholeToppings: ['Ham', 'Pineapple'] }
+  ],
+  sides: [
+    { name: 'Wings (12pc)', quantity: 1 },
+    { name: 'Garlic Knots', quantity: 2 },
+    { name: 'Fries', quantity: 3 }
+  ]
+};
+
+const argsPayload = orderSize === 'large' ? largePayload 
+                  : orderSize === 'medium' ? mediumPayload 
+                  : smallPayload;
 
 // Some systems send a wrapper structure; keep for testing shape mismatch.
 const wrapperPayload = {
@@ -67,10 +93,6 @@ const safeUrlHost = (() => {
 
 const start = Date.now();
 
-// #region agent log H1
-fetch('http://127.0.0.1:7243/ingest/f77fc304-00be-4268-a2f4-fec2e797516e', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'debug-session', runId, hypothesisId: 'H1', location: 'debug-submit-order-toolcall.mjs:entry', message: 'Starting submit_order tool call simulation', data: { mode, urlHost: safeUrlHost, payloadKeys: Object.keys(payload) }, timestamp: Date.now() }) }).catch(() => {});
-// #endregion
-
 const controller = new AbortController();
 const timeoutMs = 20_000;
 const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -89,9 +111,6 @@ try {
   durationMs = Date.now() - start;
 } catch (e) {
   durationMs = Date.now() - start;
-  // #region agent log H3
-  fetch('http://127.0.0.1:7243/ingest/f77fc304-00be-4268-a2f4-fec2e797516e', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'debug-session', runId, hypothesisId: 'H3', location: 'debug-submit-order-toolcall.mjs:fetch', message: 'HTTP request failed or timed out', data: { mode, urlHost: safeUrlHost, durationMs, errorName: e?.name, errorMessage: String(e?.message || '').slice(0, 180) }, timestamp: Date.now() }) }).catch(() => {});
-  // #endregion
   console.error('Request failed:', e?.name, e?.message);
   process.exitCode = 1;
   clearTimeout(timeout);
@@ -101,10 +120,6 @@ clearTimeout(timeout);
 
 const contentType = res.headers.get('content-type') || '';
 
-// #region agent log H2
-fetch('http://127.0.0.1:7243/ingest/f77fc304-00be-4268-a2f4-fec2e797516e', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'debug-session', runId, hypothesisId: 'H2', location: 'debug-submit-order-toolcall.mjs:response', message: 'Received HTTP response', data: { mode, urlHost: safeUrlHost, status: res.status, ok: res.ok, contentType: contentType.slice(0, 80), durationMs, bodyLen: text.length }, timestamp: Date.now() }) }).catch(() => {});
-// #endregion
-
 let parsed = null;
 let parseError = null;
 try {
@@ -113,10 +128,6 @@ try {
   parseError = e;
 }
 
-// #region agent log H1
-fetch('http://127.0.0.1:7243/ingest/f77fc304-00be-4268-a2f4-fec2e797516e', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'debug-session', runId, hypothesisId: 'H1', location: 'debug-submit-order-toolcall.mjs:parse', message: 'Parsed response body', data: { mode, status: res.status, jsonParsed: !!parsed && !parseError, parseErrorName: parseError?.name, parseErrorMessage: String(parseError?.message || '').slice(0, 180), topKeys: parsed && typeof parsed === 'object' ? Object.keys(parsed).slice(0, 10) : [], errorField: typeof parsed?.error === 'string' ? parsed.error.slice(0, 120) : undefined }, timestamp: Date.now() }) }).catch(() => {});
-// #endregion
-
 console.log('--- submit_order debug ---');
 console.log('URL:', endpointUrl);
 console.log('Mode:', mode);
@@ -124,7 +135,39 @@ console.log('HTTP:', res.status, res.statusText);
 console.log('Content-Type:', contentType || '(none)');
 console.log('Duration(ms):', durationMs);
 console.log('Body length:', text.length);
-console.log('Body preview:', text.slice(0, 500));
+
+if (parsed) {
+  console.log('\n=== Parsed Response ===');
+  console.log(JSON.stringify(parsed, null, 2));
+  
+  // Validate Vapi response format
+  console.log('\n=== Validation ===');
+  const hasResults = Array.isArray(parsed.results);
+  console.log(hasResults ? '✅ Has "results" array' : '❌ Missing "results" array');
+  
+  if (hasResults && parsed.results[0]) {
+    const result = parsed.results[0].result;
+    if (result) {
+      console.log('✅ Has result object');
+      
+      // Check for ETA fields
+      const hasEtaMin = typeof result.etaMinMinutes === 'number';
+      const hasEtaMax = typeof result.etaMaxMinutes === 'number';
+      const hasEtaText = typeof result.etaText === 'string';
+      
+      console.log(hasEtaMin ? `✅ etaMinMinutes: ${result.etaMinMinutes}` : '❌ Missing etaMinMinutes');
+      console.log(hasEtaMax ? `✅ etaMaxMinutes: ${result.etaMaxMinutes}` : '❌ Missing etaMaxMinutes');
+      console.log(hasEtaText ? `✅ etaText: "${result.etaText}"` : '❌ Missing etaText');
+      console.log(result.total ? `✅ total: $${result.total}` : '❌ Missing total');
+      console.log(result.orderId ? `✅ orderId: ${result.orderId}` : '❌ Missing orderId');
+    } else if (parsed.results[0].error) {
+      console.log(`❌ Error: ${parsed.results[0].error}`);
+    }
+  }
+} else {
+  console.log('Body preview:', text.slice(0, 500));
+}
+
 
 
 

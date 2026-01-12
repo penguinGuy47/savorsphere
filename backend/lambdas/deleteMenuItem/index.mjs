@@ -11,7 +11,7 @@ const TABLES = {
 export const handler = async (event) => {
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-restaurant-id",
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Content-Type": "application/json",
   };
@@ -39,23 +39,41 @@ export const handler = async (event) => {
     // MULTI-TENANT: Extract restaurantId from event context
     const restaurantId = extractRestaurantId(event);
 
-    // Get existing menu item to verify it exists and check restaurantId
-    const getRes = await ddb.send(
-      new GetItemCommand({
-        TableName: TABLES.MENU_ITEMS,
-        Key: { itemId: { S: String(menuItemId) } },
-      })
-    );
+    // Resolve which DynamoDB PK to delete:
+    // - Prefer restaurant-prefixed PK when restaurantId exists (e.g., demo123#pizza-byo)
+    // - Fall back to legacy unprefixed PK if it exists
+    const rawId = String(menuItemId);
+    const candidates = rawId.includes('#')
+      ? [rawId]
+      : [
+          ...(restaurantId ? [`${restaurantId}#${rawId}`] : []),
+          rawId,
+        ];
 
-    if (!getRes.Item) {
+    let resolvedKey = null;
+    let existingItem = null;
+    for (const candidate of candidates) {
+      const getRes = await ddb.send(
+        new GetItemCommand({
+          TableName: TABLES.MENU_ITEMS,
+          Key: { itemId: { S: String(candidate) } },
+        })
+      );
+
+      if (getRes.Item) {
+        resolvedKey = String(candidate);
+        existingItem = unmarshall(getRes.Item);
+        break;
+      }
+    }
+
+    if (!resolvedKey || !existingItem) {
       return {
         statusCode: 404,
         headers: corsHeaders,
         body: JSON.stringify({ error: "Menu item not found" }),
       };
     }
-
-    const existingItem = unmarshall(getRes.Item);
 
     // MULTI-TENANT: Verify restaurantId matches if provided
     if (restaurantId && existingItem.restaurantId && existingItem.restaurantId !== restaurantId) {
@@ -69,7 +87,7 @@ export const handler = async (event) => {
     // Delete the menu item
     const deleteParams = {
       TableName: TABLES.MENU_ITEMS,
-      Key: { itemId: { S: String(menuItemId) } },
+      Key: { itemId: { S: String(resolvedKey) } },
     };
 
     // MULTI-TENANT: Add restaurantId condition if available
@@ -87,7 +105,7 @@ export const handler = async (event) => {
       headers: corsHeaders,
       body: JSON.stringify({
         message: "Menu item deleted successfully",
-        menuItemId: String(menuItemId),
+        menuItemId: String(resolvedKey),
       }),
     };
   } catch (error) {
@@ -109,4 +127,8 @@ export const handler = async (event) => {
     };
   }
 };
+
+
+
+
 

@@ -1,6 +1,7 @@
 import { DynamoDBClient, PutItemCommand, BatchWriteItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { extractRestaurantId, injectRestaurantIdForWrite } from '../utils/inject-restaurant-id.mjs';
+import { generateOrderId, getNextOrderNumber } from '../utils/order-number.mjs';
 
 
 const ddb = new DynamoDBClient({ region: "us-east-2" });
@@ -37,15 +38,16 @@ function extractSubmitOrderToolCallId(body) {
     // Direct toolCallId in body (some Vapi configurations)
     if (parsed?.toolCallId) return parsed.toolCallId;
 
-    // Check wrapped tool-call formats
-    const lists = [
-      parsed?.message?.toolCalls,
-      parsed?.message?.toolCallList,
-      parsed?.message?.toolWithToolCallList,
-    ].filter(Array.isArray);
+    const toolCalls = parsed?.message?.toolCalls;
+    if (Array.isArray(toolCalls) && toolCalls[0]?.id) return toolCalls[0].id;
 
-    for (const list of lists) {
-      const tc = list.find((t) => t?.function?.name === "submit_order");
+    const toolCallList = parsed?.message?.toolCallList;
+    if (Array.isArray(toolCallList) && toolCallList[0]?.id) return toolCallList[0].id;
+
+    const toolWithToolCallList = parsed?.message?.toolWithToolCallList;
+    if (Array.isArray(toolWithToolCallList)) {
+      const entry = toolWithToolCallList[0];
+      const tc = entry?.toolCall || entry;
       if (tc?.id) return tc.id;
     }
 
@@ -66,9 +68,12 @@ function vapiToolResponse({ toolCallId, result, error }) {
 
   if (error) {
     entry.error = toSingleLine(error);
+  } else if (typeof result === "string") {
+    entry.result = { ok: true, message: toSingleLine(result) };
   } else {
-    // Result can be string or object
-    entry.result = typeof result === "string" ? toSingleLine(result) : result;
+    const payload = result && typeof result === "object" ? { ...result } : {};
+    if (payload.ok == null) payload.ok = true;
+    entry.result = payload;
   }
 
   return {
@@ -524,6 +529,22 @@ function extractOrderArguments(body) {
  return args;
 }
 
+function extractCallIdFromHeaders(headers) {
+  if (!headers || typeof headers !== "object") return "";
+  const key = Object.keys(headers).find((k) => k.toLowerCase() === "x-call-id");
+  const value = key ? headers[key] : "";
+  return value ? String(value).trim() : "";
+}
+
+function normalizePhone10(value) {
+  if (!value) return "";
+  let digits = String(value).replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) {
+    digits = digits.slice(1);
+  }
+  return digits.length === 10 ? digits : "";
+}
+
 
 export const handler = async (event) => {
  const startTime = Date.now();
@@ -560,14 +581,48 @@ export const handler = async (event) => {
    });
 
 
-   const {
+   let {
      pizzas = [],
      sides = [],
      orderType = "pickup",
      customerPhone = "",
      deliveryAddress = "",
+     addressStatus = "",
+     callbackPhone = "",
+     callId = "",
+     reason = "",
      // Note: totalCents from VAPI is ignored - we calculate server-side
    } = args;
+
+   const headerCallId = extractCallIdFromHeaders(event?.headers);
+   if (headerCallId) {
+     callId = headerCallId;
+   }
+
+   const normalizedAddressStatus = typeof addressStatus === "string" ? addressStatus.toLowerCase() : "";
+   const needsCallback = normalizedAddressStatus === "unconfirmed";
+   if (needsCallback && !callbackPhone && customerPhone) {
+     callbackPhone = customerPhone;
+   }
+
+   const normalizedCustomerPhone = normalizePhone10(customerPhone);
+   const normalizedCallbackPhone = normalizePhone10(callbackPhone);
+   if (!normalizedCustomerPhone) {
+     return vapiToolResponse({
+       toolCallId,
+       error: "Invalid customerPhone. Provide a 10-digit phone number.",
+     });
+   }
+   customerPhone = normalizedCustomerPhone;
+   if (callbackPhone && !normalizedCallbackPhone) {
+     return vapiToolResponse({
+       toolCallId,
+       error: "Invalid callbackPhone. Provide a 10-digit phone number.",
+     });
+   }
+   if (normalizedCallbackPhone) {
+     callbackPhone = normalizedCallbackPhone;
+   }
 
 
    // MULTI-TENANT: Extract restaurantId from event context or body metadata
@@ -588,11 +643,45 @@ export const handler = async (event) => {
    restaurantId = restaurantId || "test-001";
 
 
-   // Validate that we have items
+   // Validate that we have items (unless this is a placeholder callback order)
    const hasPizzas = Array.isArray(pizzas) && pizzas.length > 0;
    const hasSides = Array.isArray(sides) && sides.length > 0;
+
+   if (needsCallback) {
+     const normalizedCallId = String(callId || "").trim();
+     const normalizedDeliveryAddress = String(deliveryAddress || "").trim();
+     
+     if (!normalizedCallbackPhone) {
+       return vapiToolResponse({
+         toolCallId,
+         error: "Invalid callbackPhone. Provide a 10-digit phone number.",
+       });
+     }
+     
+     if (!normalizedCallId) {
+       return vapiToolResponse({
+         toolCallId,
+         error: "Missing callId for address-unconfirmed placeholder order.",
+       });
+     }
+     callId = normalizedCallId;
+     
+     if (normalizedDeliveryAddress) {
+       return vapiToolResponse({
+         toolCallId,
+         error: "deliveryAddress must be empty for address-unconfirmed placeholder orders.",
+       });
+     }
+     
+     if (orderType !== "delivery") {
+       return vapiToolResponse({
+         toolCallId,
+         error: "orderType must be delivery for address-unconfirmed placeholder orders.",
+       });
+     }
+   }
   
-   if (!hasPizzas && !hasSides) {
+   if (!hasPizzas && !hasSides && !needsCallback) {
      console.error("[VAPI Order] Validation failed: No items found in arguments", {
        pizzas: pizzas,
        sides: sides,
@@ -605,6 +694,8 @@ export const handler = async (event) => {
    }
 
 
+   let callbackOrderId = null;
+   
    // Transform VAPI payload into items format with server-calculated prices
    const items = [
      ...(hasPizzas ? pizzas.map((pizza, idx) => transformPizzaToItem(pizza, idx)) : []),
@@ -624,6 +715,120 @@ export const handler = async (event) => {
    });
 
 
+   // Placeholder order: create a callback record without pricing or items
+   if (needsCallback) {
+     const normalizedCallId = String(callId || "").trim();
+     
+     callbackOrderId = `vapi_callback_${restaurantId}_${normalizedCallId}`;
+     
+     const existing = await ddb.send(
+       new GetItemCommand({
+         TableName: TABLES.ORDERS,
+         Key: { orderId: { S: callbackOrderId } },
+       })
+     );
+     
+     if (existing.Item) {
+       const existingOrder = unmarshall(existing.Item);
+       return vapiToolResponse({
+         toolCallId,
+         result: {
+           orderId: existingOrder.orderId,
+           orderNumber: existingOrder.orderNumber || null,
+           status: existingOrder.status || "needs_callback",
+           addressStatus: existingOrder.addressStatus || "unconfirmed",
+           callbackPhone: existingOrder.callbackPhone || normalizedCallbackPhone,
+         },
+       });
+     }
+     
+     if (!hasPizzas && !hasSides) {
+       const orderNumber = await getNextOrderNumber(restaurantId);
+       const createdAt = new Date().toISOString();
+       
+       let placeholderRecord = {
+         orderId: callbackOrderId,
+         orderNumber,
+         createdAt,
+         status: "needs_callback",
+         orderType: "delivery",
+         subtotal: 0,
+         deliveryFee: 0,
+         tax: 0,
+         tip: 0,
+         total: 0,
+         taxRate: 0,
+         customer: {
+           name: "",
+           phone: customerPhone,
+           email: "",
+           address: "",
+           table: "",
+           instructions: "",
+         },
+         addressStatus: "unconfirmed",
+         callbackPhone: normalizedCallbackPhone,
+         callId: normalizedCallId,
+         reason: reason || undefined,
+         source: "vapi",
+       };
+       
+       if (restaurantId) {
+         placeholderRecord = injectRestaurantIdForWrite(placeholderRecord, restaurantId);
+       }
+       
+       try {
+         await ddb.send(
+           new PutItemCommand({
+             TableName: TABLES.ORDERS,
+             Item: marshall(placeholderRecord, { removeUndefinedValues: true }),
+             ConditionExpression: "attribute_not_exists(orderId)",
+           })
+         );
+       } catch (error) {
+         if (error?.name === "ConditionalCheckFailedException") {
+           const existingFallback = await ddb.send(
+             new GetItemCommand({
+               TableName: TABLES.ORDERS,
+               Key: { orderId: { S: callbackOrderId } },
+             })
+           );
+           if (existingFallback.Item) {
+             const existingOrder = unmarshall(existingFallback.Item);
+             return vapiToolResponse({
+               toolCallId,
+               result: {
+                 orderId: existingOrder.orderId,
+                 orderNumber: existingOrder.orderNumber || null,
+                 status: existingOrder.status || "needs_callback",
+                 addressStatus: existingOrder.addressStatus || "unconfirmed",
+                 callbackPhone: existingOrder.callbackPhone || normalizedCallbackPhone,
+               },
+             });
+           }
+         }
+         console.error("[VAPI Order] Placeholder PutItem failed", {
+           error: error?.message || String(error),
+         });
+         return vapiToolResponse({
+           toolCallId,
+           error: "Failed to create placeholder order.",
+         });
+       }
+       
+       return vapiToolResponse({
+         toolCallId,
+         result: {
+           orderId: callbackOrderId,
+           orderNumber,
+           status: "needs_callback",
+           addressStatus: "unconfirmed",
+           callbackPhone: normalizedCallbackPhone,
+         },
+       });
+     }
+   }
+
    // Load settings to compute tax and ETA
    const settingId = restaurantId
      ? (restaurantId.startsWith('restaurant-config') ? restaurantId : `restaurant-config-${restaurantId}`)
@@ -637,12 +842,23 @@ export const handler = async (event) => {
    );
    const settings = settingsRes.Item ? unmarshall(settingsRes.Item) : {};
    const taxRate = toNumber(settings?.taxRate, 0);
-   const etaMinutes = toNumber(settings?.etaMinutes ?? settings?.defaultEtaMinutes, 30);
+  
+   // ETA calculation settings with defaults
+   const etaPickupBase = toNumber(settings?.etaPickupBaseMinutes, 15);
+   const etaPickupRange = toNumber(settings?.etaPickupRangeMinutes, 5);
+   const etaDeliveryBase = toNumber(settings?.etaDeliveryBaseMinutes, 30);
+   const etaDeliveryRange = toNumber(settings?.etaDeliveryRangeMinutes, 10);
+   const etaRushMultiplier = toNumber(settings?.etaRushMultiplier, 1.0);
+   const etaPerPizza = toNumber(settings?.etaPerPizzaMinutes, 3);
+   const etaPerSide = toNumber(settings?.etaPerSideMinutes, 1);
+   const etaSizeAdd = settings?.etaSizeAddMinutes || { Personal: 0, Small: 0, Medium: 2, Large: 4, XLarge: 6 };
   
    console.log("[VAPI Order] Settings loaded", {
      settingId,
      taxRate: `${taxRate}%`,
-     etaMinutes,
+     etaPickupBase,
+     etaDeliveryBase,
+     etaRushMultiplier,
    });
 
 
@@ -668,7 +884,9 @@ export const handler = async (event) => {
    const total = +(subtotal + deliveryFee + tax + tip).toFixed(2);
 
 
-   const orderId = `ord_${Date.now()}`;
+   // Generate unique orderId and sequential orderNumber
+   const orderId = callbackOrderId || generateOrderId();
+   const orderNumber = await getNextOrderNumber(restaurantId);
    const createdAt = new Date().toISOString();
   
    console.log("[VAPI Order] Totals calculated (SERVER-SIDE)", {
@@ -680,12 +898,59 @@ export const handler = async (event) => {
      orderType,
    });
 
+   // ============================================
+   // ETA CALCULATION (based on order contents + settings)
+   // ============================================
+   const pizzaCount = pizzas.length;
+   const sideCount = sides.reduce((sum, s) => sum + toNumber(s.quantity, 1), 0);
+   
+   // Base ETA depends on order type
+   const baseEta = orderType === "delivery" ? etaDeliveryBase : etaPickupBase;
+   const rangeEta = orderType === "delivery" ? etaDeliveryRange : etaPickupRange;
+   
+   // Add time for extra pizzas (first pizza is included in base)
+   const extraPizzaTime = pizzaCount > 1 ? (pizzaCount - 1) * etaPerPizza : 0;
+   
+   // Add time for sides
+   const sideTime = sideCount * etaPerSide;
+   
+   // Add time based on pizza sizes
+   const sizeTime = pizzas.reduce((sum, pizza) => {
+     const size = pizza.size || "Medium";
+     return sum + toNumber(etaSizeAdd[size], 0);
+   }, 0);
+   
+   // Calculate raw ETA before rush multiplier
+   const rawEtaMin = baseEta + extraPizzaTime + sideTime + sizeTime;
+   
+   // Apply rush multiplier and round to nearest minute
+   const etaMinMinutes = Math.round(rawEtaMin * etaRushMultiplier);
+   const etaMaxMinutes = Math.round((rawEtaMin + rangeEta) * etaRushMultiplier);
+   
+   // Generate human-readable ETA text for Vapi to speak
+   const etaText = `about ${etaMinMinutes} to ${etaMaxMinutes} minutes`;
+   
+   console.log("[VAPI Order] ETA calculated", {
+     orderType,
+     pizzaCount,
+     sideCount,
+     baseEta,
+     extraPizzaTime,
+     sideTime,
+     sizeTime,
+     rushMultiplier: etaRushMultiplier,
+     etaMinMinutes,
+     etaMaxMinutes,
+     etaText,
+   });
+
 
    // Persist order header
    let orderRecord = {
      orderId,
+     orderNumber, // Sequential order number for display (e.g., 1001, 1002)
      createdAt,
-     status: "new", // VAPI orders start as "new" (not paid yet)
+     status: needsCallback ? "needs_callback" : "new", // VAPI orders start as "new" (not paid yet)
      orderType,
      subtotal: +subtotal.toFixed(2),
      deliveryFee: +deliveryFee.toFixed(2),
@@ -693,7 +958,10 @@ export const handler = async (event) => {
      tip: +tip.toFixed(2),
      total: +total.toFixed(2),
      taxRate,
-     etaMinutes,
+     // ETA range for kitchen display
+     etaMinMinutes,
+     etaMaxMinutes,
+     etaText,
      customer: {
        name: "", // VAPI doesn't provide name
        phone: customerPhone,
@@ -702,6 +970,10 @@ export const handler = async (event) => {
        table: "",
        instructions: "",
      },
+     addressStatus: normalizedAddressStatus || undefined,
+     callbackPhone: callbackPhone || undefined,
+     callId: callId || undefined,
+     reason: reason || undefined,
      // Store source for analytics
      source: "vapi",
    };
@@ -792,22 +1064,26 @@ export const handler = async (event) => {
    });
 
 
-   // Response includes server-calculated total for Vapi to read back
+   // Response includes server-calculated total and ETA for Vapi to read back
    const response = {
      orderId,
+     orderNumber, // Sequential order number for the customer (e.g., 1001)
      total: +total.toFixed(2),
      subtotal: +subtotal.toFixed(2),
      deliveryFee: +deliveryFee.toFixed(2),
      tax: +tax.toFixed(2),
      itemCount: items.length,
+     etaMinMinutes,
+     etaMaxMinutes,
+     etaText,
      status: "success",
-     message: `Order ${orderId} created successfully. Total: $${total.toFixed(2)}`,
    };
    
    // Return Vapi-compatible response (HTTP 200 with results array)
+   // Include structured result so Vapi can access etaText
    return vapiToolResponse({
      toolCallId,
-     result: response.message,
+     result: response,
    });
  } catch (error) {
    const duration = Date.now() - startTime;

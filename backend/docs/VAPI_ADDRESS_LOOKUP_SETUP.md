@@ -128,8 +128,12 @@ Call the `lookup_address` tool with:
 **If result is "not_found" and attempt was 2:**
 - Say: "I'm having trouble finding that address in our system. Let me have someone call you right back to confirm. What's the best number to reach you?"
 - Collect their callback number
-- Say: "Perfect, someone will call you back shortly at [number] to complete your order. Thank you!"
-- End the call gracefully
+- Say: "Perfect. We'll call you back shortly at [number] to confirm the address. Let's finish your order real quick."
+- Continue the order flow, and when you call `submit_order` include:
+  - `addressStatus`: `"unconfirmed"`
+  - `callbackPhone`: the number they gave you
+  - `callId`: the current call's id
+  - `reason`: `"address_unconfirmed"`
 
 **If result is "zip_not_covered":**
 - Say: "I'm sorry, but that ZIP code doesn't appear to be in our delivery area. Would you like to place a pickup order instead?"

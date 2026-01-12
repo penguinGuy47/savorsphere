@@ -1,13 +1,141 @@
-import { DynamoDBClient, ScanCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
+/**
+ * GET /orders - List orders with flexible date filtering
+ * Supports: days (default 30), from/to date range, all=true, pagination via cursor
+ */
+import { DynamoDBClient, ScanCommand, QueryCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
-import { extractRestaurantId, injectRestaurantIdBatch, addRestaurantIdFilter } from '../utils/inject-restaurant-id.mjs';
+import { extractAndValidateRestaurantId, injectRestaurantIdBatch, addRestaurantIdFilter } from '../utils/inject-restaurant-id.mjs';
 
 const ddb = new DynamoDBClient();
 
 const TABLES = {
   ORDERS: "Orders",
   ORDER_ITEMS: "OrderItems",
+  SETTINGS: "RestaurantSettings",
 };
+
+// Default to last 30 days
+const DEFAULT_DAYS = 30;
+
+/**
+ * Safely parse a date string or timestamp.
+ * Returns null if the date is invalid.
+ */
+function safeParseDate(value) {
+  if (!value) return null;
+  
+  // If already a Date object
+  if (value instanceof Date) {
+    return isNaN(value.getTime()) ? null : value;
+  }
+  
+  // If number (timestamp)
+  if (typeof value === 'number') {
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  
+  // If string
+  if (typeof value === 'string') {
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  
+  return null;
+}
+
+/**
+ * Sanitize createdAt field - ensure we always have valid date fields
+ */
+function sanitizeCreatedAt(order) {
+  let createdAtDate = safeParseDate(order.createdAt);
+  
+  // Try alternative fields if createdAt is invalid
+  if (!createdAtDate && order.date) {
+    createdAtDate = safeParseDate(order.date);
+  }
+  
+  // If still invalid, try to extract from orderId (ord_1766887721913 format)
+  if (!createdAtDate && order.orderId && order.orderId.startsWith('ord_')) {
+    const timestamp = parseInt(order.orderId.replace('ord_', ''), 10);
+    if (!isNaN(timestamp) && timestamp > 0) {
+      createdAtDate = new Date(timestamp);
+      if (isNaN(createdAtDate.getTime())) {
+        createdAtDate = null;
+      }
+    }
+  }
+  
+  // Fallback to now (shouldn't happen with valid data)
+  if (!createdAtDate) {
+    createdAtDate = new Date();
+  }
+  
+  return {
+    createdAt: createdAtDate.toISOString(),
+    createdAtMs: createdAtDate.getTime(),
+  };
+}
+
+/**
+ * Get JWT claims from API Gateway (HTTP API JWT authorizer).
+ */
+function getJwtClaims(event) {
+  return event?.requestContext?.authorizer?.jwt?.claims || null;
+}
+
+/**
+ * Is this request authenticated as a kitchen device user?
+ * Kitchen users are created as username: kitchen-{restaurantId}
+ */
+function isKitchenClaims(claims) {
+  if (!claims) return false;
+  const username = claims['cognito:username'] || claims.username || '';
+  return typeof username === 'string' && username.startsWith('kitchen-');
+}
+
+function parseClaimInt(claims, key) {
+  if (!claims || claims[key] == null) return null;
+  const n = parseInt(String(claims[key]), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Enforce that kitchen tokens are only valid if issued AFTER the current PIN was set.
+ * This makes PIN regeneration immediately invalidate all existing paired devices.
+ */
+async function assertKitchenSessionValid(restaurantId, claims) {
+  // Prefer auth_time, fall back to iat (both are seconds since epoch)
+  const authTimeSec = parseClaimInt(claims, 'auth_time') || parseClaimInt(claims, 'iat');
+  if (!authTimeSec) {
+    return { ok: false, reason: 'Missing auth_time' };
+  }
+
+  const tokenAuthMs = authTimeSec * 1000;
+  const settingId = `restaurant-config-${restaurantId}`;
+
+  const { Item } = await ddb.send(new GetItemCommand({
+    TableName: TABLES.SETTINGS,
+    Key: { settingId: { S: settingId } },
+  }));
+
+  const settings = Item ? unmarshall(Item) : {};
+  const pinSetAt = settings.kitchenPinSetAt;
+  if (!pinSetAt) {
+    return { ok: true };
+  }
+
+  const pinSetMs = new Date(pinSetAt).getTime();
+  if (!Number.isFinite(pinSetMs)) {
+    return { ok: true };
+  }
+
+  if (tokenAuthMs < pinSetMs) {
+    return { ok: false, reason: 'PIN rotated' };
+  }
+
+  return { ok: true };
+}
 
 export const handler = async (event) => {
   // CORS headers for all responses
@@ -18,7 +146,7 @@ export const handler = async (event) => {
     "Content-Type": "application/json",
   };
 
-  // Handle CORS preflight requests (check both HTTP API and REST API formats)
+  // Handle CORS preflight requests
   const method = event.requestContext?.http?.method || event.httpMethod || event.requestContext?.httpMethod;
   if (method === 'OPTIONS') {
     return {
@@ -29,93 +157,158 @@ export const handler = async (event) => {
   }
 
   try {
-    // MULTI-TENANT: Extract restaurantId from event context
-    const restaurantId = extractRestaurantId(event);
+    // MULTI-TENANT: Extract restaurantId (JWT claims take precedence and must match header/path if both exist)
+    const { restaurantId, error: tenantError } = extractAndValidateRestaurantId(event, { requireJwt: false, validateMatch: true });
+    if (tenantError) {
+      return {
+        statusCode: 403,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: tenantError }),
+      };
+    }
+
+    // If this is a kitchen JWT request, enforce PIN rotation invalidation
+    const claims = getJwtClaims(event);
+    if (restaurantId && isKitchenClaims(claims)) {
+      const session = await assertKitchenSessionValid(restaurantId, claims);
+      if (!session.ok) {
+        return {
+          statusCode: 401,
+          headers: corsHeaders,
+          body: JSON.stringify({ error: "Kitchen session invalidated. Please re-pair with the new PIN." }),
+        };
+      }
+    }
     
     // Get query parameters
     const queryParams = event?.queryStringParameters || {};
-    const dateFilter = queryParams.date; // Optional: filter by date (YYYY-MM-DD)
+    const daysParam = queryParams.days; // Number of days to look back (default: 30)
+    const fromParam = queryParams.from; // Start date (ISO or YYYY-MM-DD)
+    const toParam = queryParams.to; // End date (ISO or YYYY-MM-DD)
+    const allParam = queryParams.all; // If "true", return all orders (no date filter)
     const statusFilter = queryParams.status; // Optional: filter by status
     const orderTypeFilter = queryParams.orderType; // Optional: filter by orderType
+    const cursorParam = queryParams.cursor; // Pagination cursor (base64 encoded LastEvaluatedKey)
 
-    // Calculate today's date range (for filtering after scan)
-    const today = dateFilter ? new Date(dateFilter) : new Date();
-    const startOfDay = new Date(today);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(today);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    // Scan all orders (we'll filter in JavaScript for flexibility)
-    // This allows us to handle different field name variations
-    const scanParams = {
-      TableName: TABLES.ORDERS,
-    };
+    // Determine date range
+    let startDate, endDate;
+    const now = new Date();
     
-    // MULTI-TENANT: Add restaurantId filter if available
-    if (restaurantId) {
-      addRestaurantIdFilter(scanParams, restaurantId);
+    if (allParam === 'true') {
+      // No date filtering - return all orders
+      startDate = null;
+      endDate = null;
+    } else if (fromParam || toParam) {
+      // Use explicit from/to range
+      if (fromParam) {
+        startDate = safeParseDate(fromParam);
+        if (!startDate) {
+          return {
+            statusCode: 400,
+            headers: corsHeaders,
+            body: JSON.stringify({ error: "Invalid 'from' date format" }),
+          };
+        }
+        startDate.setHours(0, 0, 0, 0);
+      }
+      if (toParam) {
+        endDate = safeParseDate(toParam);
+        if (!endDate) {
+          return {
+            statusCode: 400,
+            headers: corsHeaders,
+            body: JSON.stringify({ error: "Invalid 'to' date format" }),
+          };
+        }
+        endDate.setHours(23, 59, 59, 999);
+      }
+      // If only from is provided, default to = now
+      if (fromParam && !toParam) {
+        endDate = new Date(now);
+        endDate.setHours(23, 59, 59, 999);
+      }
+      // If only to is provided, default from = 30 days before to
+      if (toParam && !fromParam) {
+        startDate = new Date(endDate);
+        startDate.setDate(startDate.getDate() - DEFAULT_DAYS);
+        startDate.setHours(0, 0, 0, 0);
+      }
+    } else {
+      // Default: last N days (default 30)
+      const days = parseInt(daysParam, 10) || DEFAULT_DAYS;
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - days);
+      startDate.setHours(0, 0, 0, 0);
     }
 
-    const scanResult = await ddb.send(new ScanCommand(scanParams));
-    let orders = (scanResult.Items || []).map(unmarshall);
+    // Paginate through all results using LastEvaluatedKey
+    let allOrders = [];
+    let lastEvaluatedKey = cursorParam 
+      ? JSON.parse(Buffer.from(cursorParam, 'base64').toString('utf8')) 
+      : undefined;
     
+    // Limit iterations to prevent infinite loops (safety)
+    const MAX_ITERATIONS = 100;
+    let iterations = 0;
+    
+    do {
+      const scanParams = {
+        TableName: TABLES.ORDERS,
+      };
+      
+      // Add pagination cursor
+      if (lastEvaluatedKey) {
+        scanParams.ExclusiveStartKey = lastEvaluatedKey;
+      }
+      
+      // MULTI-TENANT: Add restaurantId filter if available
+      if (restaurantId) {
+        addRestaurantIdFilter(scanParams, restaurantId);
+      }
+
+      const scanResult = await ddb.send(new ScanCommand(scanParams));
+      const batchOrders = (scanResult.Items || []).map(unmarshall);
+      allOrders = allOrders.concat(batchOrders);
+      
+      lastEvaluatedKey = scanResult.LastEvaluatedKey;
+      iterations++;
+    } while (lastEvaluatedKey && iterations < MAX_ITERATIONS);
+
     // MULTI-TENANT: Lazy inject restaurantId if missing (for backward compatibility)
     if (restaurantId) {
-      orders = injectRestaurantIdBatch(orders, restaurantId);
+      allOrders = injectRestaurantIdBatch(allOrders, restaurantId);
     }
     
-    // Normalize field names to handle different schemas
-    orders = orders.map(order => {
-      // Map date field: use createdAt if exists, otherwise date, otherwise today
-      if (!order.createdAt && order.date) {
-        order.createdAt = order.date;
-      } else if (!order.createdAt) {
-        // If no date field at all, set to today so it shows up
-        order.createdAt = new Date().toISOString();
-      }
-      
-      // Map total field: use total if exists, otherwise cost
-      if (!order.total && order.cost !== undefined) {
-        order.total = typeof order.cost === 'number' ? order.cost : parseFloat(order.cost) || 0;
-      }
-      
-      // Map orderType field: use orderType if exists, otherwise type
-      if (!order.orderType && order.type) {
-        order.orderType = order.type;
-      }
-      
-      // Ensure status exists
-      if (!order.status) {
-        order.status = 'new';
-      }
-      
-      return order;
+    // Sanitize timestamps for all orders
+    allOrders = allOrders.map(order => {
+      const { createdAt, createdAtMs } = sanitizeCreatedAt(order);
+      return {
+        ...order,
+        createdAt,
+        createdAtMs,
+      };
     });
     
-    // Apply filters in JavaScript (more flexible than DynamoDB FilterExpression)
-    // Default to today's orders, but include orders with invalid/unparseable dates
-    orders = orders.filter(order => {
-      if (!order.createdAt) return true; // Include orders without date
-      
-      try {
+    // Apply date filter in JavaScript (more flexible than DynamoDB FilterExpression)
+    if (startDate || endDate) {
+      allOrders = allOrders.filter(order => {
         const orderDate = new Date(order.createdAt);
-        // If date is invalid, include it anyway (might be old data format)
-        if (isNaN(orderDate.getTime())) {
-          return true;
-        }
-        return orderDate >= startOfDay && orderDate <= endOfDay;
-      } catch (e) {
-        // If parsing fails, include the order anyway
+        if (startDate && orderDate < startDate) return false;
+        if (endDate && orderDate > endDate) return false;
         return true;
-      }
-    });
-    
-    if (statusFilter) {
-      orders = orders.filter(order => order.status === statusFilter);
+      });
     }
     
+    // Apply status filter
+    if (statusFilter) {
+      allOrders = allOrders.filter(order => order.status === statusFilter);
+    }
+    
+    // Apply orderType filter
     if (orderTypeFilter) {
-      orders = orders.filter(order => {
+      allOrders = allOrders.filter(order => {
         const type = order.orderType || order.type;
         return type === orderTypeFilter;
       });
@@ -123,7 +316,7 @@ export const handler = async (event) => {
 
     // Fetch order items for each order
     const ordersWithItems = await Promise.all(
-      orders.map(async (order) => {
+      allOrders.map(async (order) => {
         try {
           // Try Query first, fall back to Scan if needed
           let items = [];
@@ -168,52 +361,87 @@ export const handler = async (event) => {
             .map((item) => `${item.quantity || 1}x ${item.name}`)
             .join(", ");
 
-          // Handle different field name variations
-          const orderTotal = order.total || order.cost || 0;
+          // Handle different field name variations with safe defaults
+          const orderTotal = typeof order.total === 'number' 
+            ? order.total 
+            : (parseFloat(order.total) || parseFloat(order.cost) || 0);
           const orderType = order.orderType || order.type || "pickup";
           const orderStatus = order.status || "new";
-          const createdAt = order.createdAt || order.date || new Date().toISOString();
+          
+          // Parse ETA fields - ensure they are numbers
+          const etaMinMinutes = typeof order.etaMinMinutes === 'number' 
+            ? order.etaMinMinutes 
+            : (order.etaMinMinutes ? parseInt(order.etaMinMinutes, 10) : null);
+          const etaMaxMinutes = typeof order.etaMaxMinutes === 'number' 
+            ? order.etaMaxMinutes 
+            : (order.etaMaxMinutes ? parseInt(order.etaMaxMinutes, 10) : null);
+          const etaText = order.etaText || null;
           
           return {
             id: order.orderId,
             orderId: order.orderId,
-            time: new Date(createdAt),
+            orderNumber: order.orderNumber || null, // Sequential display number (e.g., 1001)
+            time: order.createdAt, // Keep as ISO string for JSON serialization
             items: itemsSummary || "No items",
-            total: typeof orderTotal === 'number' ? orderTotal : parseFloat(orderTotal) || 0,
+            total: orderTotal,
             status: orderStatus,
             phone: order.customer?.phone || order.phone || "",
             name: order.customer?.name || order.name || "",
             email: order.customer?.email || order.email || "",
             type: orderType,
+            orderType: orderType,
             address: order.customer?.address || order.address || "",
             table: order.customer?.table || order.table || "",
             instructions: order.customer?.instructions || order.instructions || "",
+            addressStatus: order.addressStatus || "",
+            callbackPhone: order.callbackPhone || "",
             subtotal: order.subtotal || 0,
             tax: order.tax || 0,
             tip: order.tip || 0,
-            createdAt: createdAt,
+            createdAt: order.createdAt,
+            createdAtMs: order.createdAtMs,
+            etaMinMinutes: etaMinMinutes,
+            etaMaxMinutes: etaMaxMinutes,
+            etaText: etaText,
             orderItems: items,
           };
         } catch (error) {
           console.error(`Error fetching items for order ${order.orderId}:`, error);
-          // Handle different field name variations
-          const orderTotal = order.total || order.cost || 0;
+          // Return order with safe defaults even on error
+          const orderTotal = typeof order.total === 'number' 
+            ? order.total 
+            : (parseFloat(order.total) || parseFloat(order.cost) || 0);
           const orderType = order.orderType || order.type || "pickup";
           const orderStatus = order.status || "new";
-          const createdAt = order.createdAt || order.date || new Date().toISOString();
+          
+          const etaMinMinutes = typeof order.etaMinMinutes === 'number' 
+            ? order.etaMinMinutes 
+            : (order.etaMinMinutes ? parseInt(order.etaMinMinutes, 10) : null);
+          const etaMaxMinutes = typeof order.etaMaxMinutes === 'number' 
+            ? order.etaMaxMinutes 
+            : (order.etaMaxMinutes ? parseInt(order.etaMaxMinutes, 10) : null);
+          const etaText = order.etaText || null;
           
           return {
             id: order.orderId,
             orderId: order.orderId,
-            time: new Date(createdAt),
+            orderNumber: order.orderNumber || null,
+            time: order.createdAt,
             items: "Error loading items",
-            total: typeof orderTotal === 'number' ? orderTotal : parseFloat(orderTotal) || 0,
+            total: orderTotal,
             status: orderStatus,
             phone: order.customer?.phone || order.phone || "",
             name: order.customer?.name || order.name || "",
             email: order.customer?.email || order.email || "",
             type: orderType,
-            createdAt: createdAt,
+            orderType: orderType,
+            createdAt: order.createdAt,
+            createdAtMs: order.createdAtMs,
+            etaMinMinutes: etaMinMinutes,
+            etaMaxMinutes: etaMaxMinutes,
+            etaText: etaText,
+            addressStatus: order.addressStatus || "",
+            callbackPhone: order.callbackPhone || "",
             orderItems: [],
           };
         }
@@ -221,19 +449,33 @@ export const handler = async (event) => {
     );
 
     // Sort by creation time (newest first)
-    ordersWithItems.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    ordersWithItems.sort((a, b) => b.createdAtMs - a.createdAtMs);
 
-    // Calculate total revenue for today
-    const totalRevenue = ordersWithItems.reduce((sum, order) => sum + (order.total || 0), 0);
+    // Calculate total revenue for the period (exclude cancelled/refunded orders)
+    const NON_REVENUE_STATUSES = new Set(['cancelled', 'refunded', 'failed']);
+    const totalRevenue = ordersWithItems.reduce(
+      (sum, order) => sum + (NON_REVENUE_STATUSES.has(order.status) ? 0 : (order.total || 0)),
+      0
+    );
+
+    // Build response
+    const response = {
+      orders: ordersWithItems,
+      totalRevenue,
+      count: ordersWithItems.length,
+      dateRange: {
+        from: startDate ? startDate.toISOString() : null,
+        to: endDate ? endDate.toISOString() : null,
+        days: startDate && endDate 
+          ? Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))
+          : null,
+      },
+    };
 
     return {
       statusCode: 200,
       headers: corsHeaders,
-      body: JSON.stringify({
-        orders: ordersWithItems,
-        totalRevenue,
-        count: ordersWithItems.length,
-      }),
+      body: JSON.stringify(response),
     };
   } catch (error) {
     console.error("GetOrders error:", error);
@@ -244,4 +486,3 @@ export const handler = async (event) => {
     };
   }
 };
-

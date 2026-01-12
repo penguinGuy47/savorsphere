@@ -3,6 +3,176 @@
   max-width: 800px;
 }
 
+/* Kitchen PIN Section Styles */
+.pin-section {
+  border: 2px solid var(--accent-blue);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(59, 130, 246, 0.05) 100%);
+}
+
+.pin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.pin-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.pin-icon {
+  font-size: 2.5rem;
+}
+
+.pin-info {
+  flex: 1;
+}
+
+.pin-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.pin-meta {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.pin-loading {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.pin-generated {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.pin-display {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.pin-code {
+  font-size: 2.5rem;
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+  color: var(--accent-green);
+  letter-spacing: 0.15em;
+  background: var(--bg-secondary);
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  border: 2px dashed var(--accent-green);
+}
+
+.pin-copy-btn {
+  padding: 0.5rem 1rem;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color, #444);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+}
+
+.pin-copy-btn:hover {
+  background-color: var(--accent-blue);
+  color: white;
+  border-color: var(--accent-blue);
+}
+
+.pin-copy-btn.copied {
+  background-color: var(--accent-green);
+  color: white;
+  border-color: var(--accent-green);
+}
+
+.pin-warning {
+  background-color: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 8px;
+  padding: 1rem;
+  color: #f59e0b;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.pin-dismiss-btn {
+  padding: 0.75rem 1.5rem;
+  background-color: var(--accent-green);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  align-self: flex-start;
+}
+
+.pin-dismiss-btn:hover {
+  background-color: #059669;
+  transform: translateY(-1px);
+}
+
+.pin-error {
+  background-color: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 8px;
+  padding: 1rem;
+  color: #ef4444;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.pin-login-btn {
+  padding: 0.5rem 1rem;
+  background-color: var(--accent-blue);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.pin-regenerate-btn {
+  padding: 0.75rem 1.5rem;
+  background-color: var(--accent-blue);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  align-self: flex-start;
+  min-height: 44px;
+}
+
+.pin-regenerate-btn:hover:not(:disabled) {
+  background-color: #2563eb;
+  transform: translateY(-1px);
+}
+
+.pin-regenerate-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.pin-note {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
 .section {
   background-color: var(--bg-primary);
   border-radius: 12px;

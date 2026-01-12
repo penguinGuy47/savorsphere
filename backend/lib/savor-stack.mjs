@@ -2,10 +2,11 @@ import path from 'path';
 import url from 'url';
 import { Construct } from 'constructs';
 import {
-  Stack, CfnOutput, Duration,
+  Stack, CfnOutput, Duration, RemovalPolicy,
   aws_dynamodb as dynamodb,
   aws_logs as logs,
-  aws_iam as iam
+  aws_iam as iam,
+  aws_cognito as cognito,
 } from 'aws-cdk-lib';
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -13,6 +14,7 @@ import {
   HttpApi, HttpMethod
 } from '@aws-cdk/aws-apigatewayv2-alpha';
 import { HttpLambdaIntegration } from '@aws-cdk/aws-apigatewayv2-integrations-alpha';
+import { HttpJwtAuthorizer } from '@aws-cdk/aws-apigatewayv2-authorizers-alpha';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
@@ -37,6 +39,99 @@ export class SavorSphereStack extends Stack {
 
     // Streets by ZIP table for address lookup (phonetic matching)
     const StreetsByZip = dynamodb.Table.fromTableName(this, 'StreetsByZipTbl', 'StreetsByZip');
+
+    // Order counters table for sequential order numbers per restaurant
+    // Create it if it doesn't exist (CDK will handle this)
+    const OrderCounters = new dynamodb.Table(this, 'OrderCountersTbl', {
+      tableName: 'OrderCounters',
+      partitionKey: { name: 'restaurantId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+    });
+
+    // =========================================================================
+    // COGNITO: UserPool for admin dashboard + kitchen tablet auth
+    // =========================================================================
+    const userPool = new cognito.UserPool(this, 'SavorUserPool', {
+      userPoolName: 'savor-sphere-users',
+      selfSignUpEnabled: false, // Only admins create users
+      signInAliases: { username: true, email: true },
+      autoVerify: { email: true },
+      // Relaxed password policy to allow 6-digit numeric PINs for kitchen users
+      passwordPolicy: {
+        minLength: 6,
+        requireLowercase: false,
+        requireUppercase: false,
+        requireDigits: false,
+        requireSymbols: false,
+      },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      removalPolicy: RemovalPolicy.RETAIN, // Don't delete user pool on stack delete
+      // Custom attributes for multi-tenancy
+      customAttributes: {
+        restaurantId: new cognito.StringAttribute({ mutable: true }),
+      },
+    });
+
+    // Hosted UI domain for admin login
+    const userPoolDomain = userPool.addDomain('SavorUserPoolDomain', {
+      cognitoDomain: {
+        domainPrefix: `savor-sphere-${this.account}`, // Must be globally unique
+      },
+    });
+
+    // Admin dashboard client (Hosted UI with PKCE)
+    const adminClient = userPool.addClient('AdminClient', {
+      userPoolClientName: 'savor-admin-dashboard',
+      generateSecret: false, // SPA - no secret
+      authFlows: {
+        userSrp: true,
+        userPassword: true,
+      },
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+        callbackUrls: [
+          'http://localhost:3000/callback',
+          'http://localhost:4000/callback',
+          'https://admin.savorsphere.com/callback', // Update with real domain
+        ],
+        logoutUrls: [
+          'http://localhost:3000/',
+          'http://localhost:4000/',
+          'https://admin.savorsphere.com/',
+        ],
+      },
+      preventUserExistenceErrors: true,
+      accessTokenValidity: Duration.hours(1),
+      idTokenValidity: Duration.hours(1),
+      refreshTokenValidity: Duration.days(30),
+    });
+
+    // Kitchen tablet client (simple user/password auth for PIN login)
+    const kitchenClient = userPool.addClient('KitchenClient', {
+      userPoolClientName: 'savor-kitchen-tablet',
+      generateSecret: false,
+      authFlows: {
+        userPassword: true, // Allow USER_PASSWORD_AUTH for PIN login
+        adminUserPassword: true, // Allow admin to set passwords
+      },
+      preventUserExistenceErrors: true,
+      accessTokenValidity: Duration.hours(8), // Kitchen session lasts a shift
+      idTokenValidity: Duration.hours(8),
+      refreshTokenValidity: Duration.days(7),
+    });
+
+    // JWT Authorizer for protected routes
+    // HttpJwtAuthorizer: (id, issuerUrl, options)
+    const issuerUrl = `https://cognito-idp.${this.region}.amazonaws.com/${userPool.userPoolId}`;
+    const jwtAuthorizer = new HttpJwtAuthorizer('SavorJwtAuth', issuerUrl, {
+      jwtAudience: [adminClient.userPoolClientId, kitchenClient.userPoolClientId],
+      identitySource: ['$request.header.Authorization'],
+    });
+
+    // =========================================================================
+    // END COGNITO
+    // =========================================================================
 
     const api = new HttpApi(this, 'SavorHttpApi', {
       corsPreflight: {
@@ -80,6 +175,7 @@ export class SavorSphereStack extends Stack {
     OrderItems.grantReadWriteData(createOrderFn);
     Payments.grantReadWriteData(createOrderFn);
     RestaurantSettings.grantReadData(createOrderFn);
+    OrderCounters.grantReadWriteData(createOrderFn);
     api.addRoutes({
       path: '/orders',
       methods: [HttpMethod.POST],
@@ -103,6 +199,8 @@ export class SavorSphereStack extends Stack {
       entry: lambdaEntry('lambdas', 'updateOrder', 'index.mjs')
     });
     Orders.grantReadWriteData(updateOrderFn);
+    // Needed to enforce PIN-rotation invalidation for kitchen sessions
+    RestaurantSettings.grantReadData(updateOrderFn);
     api.addRoutes({
       path: '/order/{id}',
       methods: [HttpMethod.PATCH],
@@ -115,6 +213,8 @@ export class SavorSphereStack extends Stack {
     });
     Orders.grantReadData(getOrdersFn);
     OrderItems.grantReadData(getOrdersFn);
+    // Needed to enforce PIN-rotation invalidation for kitchen sessions
+    RestaurantSettings.grantReadData(getOrdersFn);
     // GET /orders for listing orders (admin), POST /orders for creating orders (customer)
     api.addRoutes({
       path: '/orders',
@@ -149,6 +249,7 @@ export class SavorSphereStack extends Stack {
       entry: lambdaEntry('lambdas', 'updateMenuItem', 'index.mjs')
     });
     MenuItems.grantReadWriteData(updateMenuItemFn);
+
     api.addRoutes({
       path: '/menu/{menuItemId}',
       methods: [HttpMethod.PUT, HttpMethod.PATCH],
@@ -182,6 +283,7 @@ export class SavorSphereStack extends Stack {
       entry: lambdaEntry('lambdas', 'updateSettings', 'index.mjs')
     });
     RestaurantSettings.grantReadWriteData(updateSettingsFn);
+
     api.addRoutes({
       path: '/settings',
       methods: [HttpMethod.PUT, HttpMethod.PATCH],
@@ -229,7 +331,8 @@ export class SavorSphereStack extends Stack {
       timeout: Duration.seconds(15),
       logRetention: logs.RetentionDays.ONE_WEEK,
       environment: {
-        TABLE_NAME: Orders.tableName
+        TABLE_NAME: Orders.tableName,
+        VAPI_SHARED_SECRET: process.env.VAPI_SHARED_SECRET || ''
       },
       bundling: {
         target: 'es2022',
@@ -239,9 +342,16 @@ export class SavorSphereStack extends Stack {
         externalModules: ['@aws-sdk/*']
       }
     });
-    Orders.grantWriteData(vapiOrderWebhook);
+    vapiOrderWebhook.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [Orders.tableArn],
+      })
+    );
     OrderItems.grantReadWriteData(vapiOrderWebhook);
     RestaurantSettings.grantReadData(vapiOrderWebhook);
+    OrderCounters.grantReadWriteData(vapiOrderWebhook);
     api.addRoutes({
       path: '/vapi/webhook',
       methods: [HttpMethod.POST],
@@ -266,6 +376,111 @@ export class SavorSphereStack extends Stack {
       integration: new HttpLambdaIntegration('LookupAddressInt', lookupAddressFn)
     });
 
+    // =========================================================================
+    // KITCHEN PIN MANAGEMENT (JWT-protected admin routes + public session route)
+    // =========================================================================
+
+    // GET /kitchen/pin - Check if PIN is set (protected, requires admin JWT)
+    const getKitchenPinFn = new NodejsFunction(this, 'GetKitchenPinFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'kitchenPin', 'getPin.mjs'),
+    });
+    RestaurantSettings.grantReadData(getKitchenPinFn);
+    api.addRoutes({
+      path: '/kitchen/pin',
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration('GetKitchenPinInt', getKitchenPinFn),
+      authorizer: jwtAuthorizer,
+    });
+
+    // POST /kitchen/pin - Regenerate PIN (protected, requires admin JWT)
+    const regenerateKitchenPinFn = new NodejsFunction(this, 'RegenerateKitchenPinFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'kitchenPin', 'regeneratePin.mjs'),
+      environment: {
+        USER_POOL_ID: userPool.userPoolId,
+      },
+    });
+    RestaurantSettings.grantReadWriteData(regenerateKitchenPinFn);
+    // Grant Cognito admin permissions for user management
+    regenerateKitchenPinFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'cognito-idp:AdminCreateUser',
+          'cognito-idp:AdminSetUserPassword',
+          'cognito-idp:AdminUserGlobalSignOut',
+          'cognito-idp:AdminGetUser',
+        ],
+        resources: [userPool.userPoolArn],
+      })
+    );
+    api.addRoutes({
+      path: '/kitchen/pin',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('RegenerateKitchenPinInt', regenerateKitchenPinFn),
+      authorizer: jwtAuthorizer,
+    });
+
+    // POST /kitchen/session - Exchange PIN for tokens (PUBLIC - no JWT required)
+    const kitchenSessionFn = new NodejsFunction(this, 'KitchenSessionFn', {
+      ...defaultFnProps,
+      entry: lambdaEntry('lambdas', 'kitchenPin', 'session.mjs'),
+      environment: {
+        USER_POOL_ID: userPool.userPoolId,
+        KITCHEN_CLIENT_ID: kitchenClient.userPoolClientId,
+      },
+    });
+    // Grant Cognito auth permissions
+    kitchenSessionFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'cognito-idp:AdminInitiateAuth',
+        ],
+        resources: [userPool.userPoolArn],
+      })
+    );
+    api.addRoutes({
+      path: '/kitchen/session',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('KitchenSessionInt', kitchenSessionFn),
+      // No authorizer - this is the login endpoint
+    });
+
+    // =========================================================================
+    // ADD JWT PROTECTION TO ADMIN/KITCHEN ROUTES
+    // =========================================================================
+    // Note: GET /orders and PATCH /order/{id} are used by KitchenView
+    // We'll add a second route with JWT protection for admin/kitchen use
+    // The existing routes remain for backward compatibility during migration
+
+    // Protected GET /orders (admin/kitchen)
+    api.addRoutes({
+      path: '/admin/orders',
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration('GetOrdersProtectedInt', getOrdersFn),
+      authorizer: jwtAuthorizer,
+    });
+
+    // Protected PATCH /order/{id} (admin/kitchen)
+    api.addRoutes({
+      path: '/admin/order/{id}',
+      methods: [HttpMethod.PATCH],
+      integration: new HttpLambdaIntegration('UpdateOrderProtectedInt', updateOrderFn),
+      authorizer: jwtAuthorizer,
+    });
+
+    // =========================================================================
+    // OUTPUTS
+    // =========================================================================
     new CfnOutput(this, 'ApiUrl', { value: api.apiEndpoint });
+    new CfnOutput(this, 'UserPoolId', { value: userPool.userPoolId });
+    new CfnOutput(this, 'UserPoolArn', { value: userPool.userPoolArn });
+    new CfnOutput(this, 'AdminClientId', { value: adminClient.userPoolClientId });
+    new CfnOutput(this, 'KitchenClientId', { value: kitchenClient.userPoolClientId });
+    new CfnOutput(this, 'CognitoDomain', { 
+      value: `https://${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com` 
+    });
   }
 }

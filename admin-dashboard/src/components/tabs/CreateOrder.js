@@ -1,7 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { getMenu, createOrder, getSettings } from '../../services/api';
 import { getCachedMenu, setCachedMenu, isCacheValid } from '../../utils/menuCache';
+import PizzaCustomizerModal from '../PizzaCustomizerModal';
 import './CreateOrder.css';
+
+/**
+ * Check if a menu item is a v2 pizza item
+ */
+function isPizzaItem(item) {
+  return item?.schemaVersion === 2 && item?.kind === 'pizza';
+}
+
+/**
+ * Generate a unique cart item ID for pizzas (since same pizza with different toppings = different items)
+ */
+function generateCartItemId() {
+  return `cart-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
 
 function CreateOrder({ restaurantId }) {
   const [menuItems, setMenuItems] = useState([]);
@@ -11,6 +26,10 @@ function CreateOrder({ restaurantId }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [settings, setSettings] = useState({ taxRate: 8.875 });
+  
+  // Pizza customizer modal state
+  const [pizzaModalOpen, setPizzaModalOpen] = useState(false);
+  const [selectedPizzaItem, setSelectedPizzaItem] = useState(null);
   
   const [formData, setFormData] = useState({
     name: '',
@@ -31,8 +50,8 @@ function CreateOrder({ restaurantId }) {
     
     // Set up periodic refresh check (every minute)
     const refreshInterval = setInterval(() => {
-      // Only refresh if cache is expired
-      if (!isCacheValid()) {
+      // Only refresh if cache is expired (pass restaurantId for multi-tenant cache check)
+      if (!isCacheValid(restaurantId)) {
         console.log('🔄 Cache expired, refreshing menu in background...');
         loadMenu(true);
       }
@@ -40,88 +59,71 @@ function CreateOrder({ restaurantId }) {
     
     return () => clearInterval(refreshInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [restaurantId]);
 
   const loadMenu = async (forceRefresh = false) => {
     try {
       setIsLoading(true);
       
-      // Check cache first (unless forcing refresh)
+      // Check cache first (unless forcing refresh) - use restaurantId for multi-tenant cache
       if (!forceRefresh) {
-        const cachedMenu = getCachedMenu();
+        const cachedMenu = getCachedMenu(restaurantId);
         if (cachedMenu && Array.isArray(cachedMenu) && cachedMenu.length > 0) {
-          console.log('✅ Using cached menu data');
-          const menuData = cachedMenu;
-          
-          // Group by category
-          const grouped = menuData.reduce((acc, item) => {
-            const category = item.category || 'Uncategorized';
-            if (!acc[category]) {
-              acc[category] = [];
-            }
-            acc[category].push(item);
-            return acc;
-          }, {});
-
-          setMenuItems(menuData);
-          setCategories(['All', ...Object.keys(grouped)]);
+          console.log('✅ Using cached menu data for', restaurantId || 'default');
+          processMenuData(cachedMenu);
           setIsLoading(false);
           return;
         }
       }
       
       // Fetch from API if cache is invalid or forced refresh
-      console.log('🔄 Fetching menu from API...');
-      const data = await getMenu();
+      console.log('🔄 Fetching menu from API for', restaurantId || 'default');
+      const data = await getMenu(restaurantId);
       const menuData = Array.isArray(data) ? data : [];
       
-      // Cache the menu data
+      // Cache the menu data (with restaurantId for multi-tenant cache)
       if (menuData.length > 0) {
-        setCachedMenu(menuData);
+        setCachedMenu(menuData, restaurantId);
         console.log('✅ Menu cached for 15 minutes');
       }
       
-      // Group by category
-      const grouped = menuData.reduce((acc, item) => {
-        const category = item.category || 'Uncategorized';
-        if (!acc[category]) {
-          acc[category] = [];
-        }
-        acc[category].push(item);
-        return acc;
-      }, {});
-
-      setMenuItems(menuData);
-      setCategories(['All', ...Object.keys(grouped)]);
+      processMenuData(menuData);
     } catch (error) {
       console.error('Error loading menu:', error);
       
       // Try to use cached data as fallback even if expired
-      const cachedMenu = getCachedMenu();
+      const cachedMenu = getCachedMenu(restaurantId);
       if (cachedMenu && Array.isArray(cachedMenu) && cachedMenu.length > 0) {
         console.log('⚠️ Using expired cache due to API error');
-        const menuData = cachedMenu;
-        
-        const grouped = menuData.reduce((acc, item) => {
-          const category = item.category || 'Uncategorized';
-          if (!acc[category]) {
-            acc[category] = [];
-          }
-          acc[category].push(item);
-          return acc;
-        }, {});
-
-        setMenuItems(menuData);
-        setCategories(['All', ...Object.keys(grouped)]);
+        processMenuData(cachedMenu);
       }
     } finally {
       setIsLoading(false);
     }
   };
 
+  const processMenuData = (menuData) => {
+    // Sort by sortOrder if available
+    const sorted = [...menuData].sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+    
+    // Group by category
+    const grouped = sorted.reduce((acc, item) => {
+      const category = item.category || 'Uncategorized';
+      if (!acc[category]) {
+        acc[category] = [];
+      }
+      acc[category].push(item);
+      return acc;
+    }, {});
+
+    setMenuItems(sorted);
+    setCategories(['All', ...Object.keys(grouped)]);
+  };
+
   const loadSettings = async () => {
     try {
-      const data = await getSettings();
+      // Pass restaurantId for multi-tenant isolation
+      const data = await getSettings(restaurantId);
       if (data.taxRate) {
         setSettings({ taxRate: data.taxRate });
       }
@@ -135,36 +137,57 @@ function CreateOrder({ restaurantId }) {
     : menuItems.filter(item => item.category === activeCategory);
 
   const addToCart = (item) => {
-    const existingItem = cart.find(cartItem => cartItem.itemId === item.itemId);
+    // If it's a pizza item, open the customizer modal
+    if (isPizzaItem(item)) {
+      setSelectedPizzaItem(item);
+      setPizzaModalOpen(true);
+      return;
+    }
+    
+    // For v1 flat items, use existing logic
+    const existingItem = cart.find(cartItem => 
+      cartItem.itemId === item.itemId && !cartItem.isPizza
+    );
+    
     if (existingItem) {
       setCart(cart.map(cartItem =>
-        cartItem.itemId === item.itemId
+        cartItem.cartItemId === existingItem.cartItemId
           ? { ...cartItem, quantity: cartItem.quantity + 1 }
           : cartItem
       ));
     } else {
       setCart([...cart, {
+        cartItemId: generateCartItemId(),
         itemId: item.itemId,
         name: item.name,
         price: item.price,
         quantity: 1,
         modifiers: [],
+        isPizza: false,
       }]);
     }
   };
 
-  const updateQuantity = (itemId, quantity) => {
+  const addPizzaToCart = (pizzaCartItem) => {
+    // Each pizza configuration is a unique cart item
+    setCart([...cart, {
+      ...pizzaCartItem,
+      cartItemId: generateCartItemId(),
+    }]);
+  };
+
+  const updateQuantity = (cartItemId, quantity) => {
     if (quantity <= 0) {
-      removeFromCart(itemId);
+      removeFromCart(cartItemId);
     } else {
       setCart(cart.map(item =>
-        item.itemId === itemId ? { ...item, quantity } : item
+        item.cartItemId === cartItemId ? { ...item, quantity } : item
       ));
     }
   };
 
-  const removeFromCart = (itemId) => {
-    setCart(cart.filter(item => item.itemId !== itemId));
+  const removeFromCart = (cartItemId) => {
+    setCart(cart.filter(item => item.cartItemId !== cartItemId));
   };
 
   const calculateTotals = () => {
@@ -193,9 +216,26 @@ function CreateOrder({ restaurantId }) {
     try {
       const { subtotal, tax, tip, total } = calculateTotals();
       
+      // Prepare order items - include pizzaDetails for pizza items
+      const orderItems = cart.map(item => {
+        const orderItem = {
+          itemId: item.itemId,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity,
+        };
+        
+        // Include pizza details for server-side pricing
+        if (item.isPizza && item.pizzaDetails) {
+          orderItem.pizzaDetails = item.pizzaDetails;
+        }
+        
+        return orderItem;
+      });
+      
       const orderData = {
         ...formData,
-        items: cart,
+        items: orderItems,
         subtotal,
         tax,
         tip,
@@ -204,9 +244,11 @@ function CreateOrder({ restaurantId }) {
         paymentMethod: formData.paymentMethod,
       };
 
-      const order = await createOrder(orderData);
+      // Pass restaurantId for multi-tenant isolation
+      const order = await createOrder(orderData, restaurantId);
       
-      alert(`Order created successfully! Order ID: ${order.orderId}`);
+      const orderDisplay = order.orderNumber ? `#${order.orderNumber}` : order.orderId;
+      alert(`Order created successfully! Order ${orderDisplay}`);
       
       // Reset form
       setCart([]);
@@ -229,7 +271,20 @@ function CreateOrder({ restaurantId }) {
     }
   };
 
-  const { subtotal, tax, tip, total } = calculateTotals();
+  const { subtotal, tax, total } = calculateTotals();
+
+  /**
+   * Get display price for a menu item (base price for pizzas, actual price for v1 items)
+   */
+  const getDisplayPrice = (item) => {
+    if (isPizzaItem(item)) {
+      // Show starting price for pizzas
+      const minSize = item.allowedSizes?.[0] || 'Personal';
+      const basePrice = item.pricingRules?.basePriceCentsBySize?.[minSize] || 1199;
+      return basePrice / 100;
+    }
+    return item.price || 0;
+  };
 
   return (
     <div className="create-order">
@@ -267,20 +322,29 @@ function CreateOrder({ restaurantId }) {
           ) : (
             <div className="menu-items-grid">
               {filteredItems.map(item => (
-                <div key={item.itemId} className="menu-item-card">
+                <div 
+                  key={item.itemId} 
+                  className={`menu-item-card ${isPizzaItem(item) ? 'pizza-item' : ''}`}
+                >
                   <div className="item-info">
-                    <h3 className="item-name">{item.name}</h3>
+                    <h3 className="item-name">
+                      {item.name}
+                      {isPizzaItem(item) && <span className="pizza-badge">🍕</span>}
+                    </h3>
                     {item.description && (
                       <p className="item-description">{item.description}</p>
                     )}
-                    <div className="item-price">${item.price.toFixed(2)}</div>
+                    <div className="item-price">
+                      {isPizzaItem(item) && <span className="starting-at">from </span>}
+                      ${getDisplayPrice(item).toFixed(2)}
+                    </div>
                   </div>
                   <button
                     className="add-item-btn"
                     onClick={() => addToCart(item)}
                     disabled={!item.available}
                   >
-                    {item.available ? '+' : 'Unavailable'}
+                    {item.available ? (isPizzaItem(item) ? 'Customize' : '+') : 'Unavailable'}
                   </button>
                 </div>
               ))}
@@ -307,28 +371,37 @@ function CreateOrder({ restaurantId }) {
             <>
               <div className="cart-items">
                 {cart.map(item => (
-                  <div key={item.itemId} className="cart-item">
+                  <div key={item.cartItemId} className="cart-item">
                     <div className="cart-item-info">
-                      <div className="cart-item-name">{item.name}</div>
+                      <div className="cart-item-name">
+                        {item.name}
+                        {item.isPizza && <span className="pizza-indicator">🍕</span>}
+                      </div>
+                      {/* Pizza summary */}
+                      {item.isPizza && item.pizzaSummary && (
+                        <div className="cart-item-pizza-summary">
+                          {item.pizzaSummary}
+                        </div>
+                      )}
                       <div className="cart-item-price">${item.price.toFixed(2)}</div>
                     </div>
                     <div className="cart-item-controls">
                       <button
                         className="quantity-btn"
-                        onClick={() => updateQuantity(item.itemId, item.quantity - 1)}
+                        onClick={() => updateQuantity(item.cartItemId, item.quantity - 1)}
                       >
                         -
                       </button>
                       <span className="quantity">{item.quantity}</span>
                       <button
                         className="quantity-btn"
-                        onClick={() => updateQuantity(item.itemId, item.quantity + 1)}
+                        onClick={() => updateQuantity(item.cartItemId, item.quantity + 1)}
                       >
                         +
                       </button>
                       <button
                         className="remove-btn"
-                        onClick={() => removeFromCart(item.itemId)}
+                        onClick={() => removeFromCart(item.cartItemId)}
                       >
                         ×
                       </button>
@@ -466,9 +539,20 @@ function CreateOrder({ restaurantId }) {
           )}
         </div>
       </div>
+
+      {/* Pizza Customizer Modal */}
+      {pizzaModalOpen && selectedPizzaItem && (
+        <PizzaCustomizerModal
+          menuItem={selectedPizzaItem}
+          onClose={() => {
+            setPizzaModalOpen(false);
+            setSelectedPizzaItem(null);
+          }}
+          onAddToCart={addPizzaToCart}
+        />
+      )}
     </div>
   );
 }
 
 export default CreateOrder;
-
